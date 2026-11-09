@@ -1,0 +1,42 @@
+[project]
+name = "clinic-receptionist"
+version = "0.1.0"
+description = "AI phone receptionist for medical clinics (single-tenant, one config per clinic)"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+    "tzdata>=2024.1",  # zoneinfo has no system tz database on Windows
+]
+
+[project.optional-dependencies]
+backend = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "websockets>=13",  # uvicorn needs it to serve /ws
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.13",
+    "itsdangerous>=2.2",
+]
+agent = [
+    # 1.8+: ToolResult(reply_required=...), session.start(record=...), ChatMessage.metrics
+    "livekit-agents[deepgram,openai,cartesia,silero]>=1.8,<2",
+]
+dev = [
+    "pytest>=8.0",
+    "anyio>=4.0",       # async tests (pytest plugin)
+    "aiosqlite>=0.20",  # tests run the backend against in-memory SQLite
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["core*", "backend*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

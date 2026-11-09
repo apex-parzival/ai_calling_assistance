@@ -1,0 +1,26 @@
+# Build from the repo root:  docker build -f deploy/Dockerfile.backend .
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    CLINICS_ROOT=/app/clinics
+
+WORKDIR /app
+RUN useradd --create-home --uid 1000 app
+
+COPY pyproject.toml alembic.ini ./
+COPY core ./core
+COPY backend ./backend
+RUN pip install ".[backend]"
+
+# Clinic config is mounted at runtime (see docker-compose.yml), never baked in,
+# so one image serves every clinic and no .env ever ends up in a layer.
+USER app
+EXPOSE 8000
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status == 200 else 1)"
+
+CMD ["uvicorn", "backend.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

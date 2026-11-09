@@ -1,0 +1,176 @@
+# Demo clinic — FICTIONAL. Names, address and numbers are made up for development.
+# Phone numbers use the 555-01xx range, which is reserved for fiction in North America.
+# This file is the only thing that differs between clinic deployments.
+
+clinic_id: demo_clinic
+name: Maplegate Family Clinic
+timezone: America/Edmonton          # Calgary is in Mountain Time
+main_phone: "+14035550142"
+website: "https://maplegate-clinic.example.com"
+
+address:
+  street: "Suite 210, 4500 Maplegate Drive SW"
+  city: Calgary
+  province: AB
+  postal_code: "T3E 0A1"
+  directions: >-
+    We're on the second floor of the Maplegate Professional Centre, above the pharmacy.
+    The elevator is to the left of the main entrance.
+
+# 24-hour times, clinic local time. A day that is missing or empty is closed.
+hours:
+  monday:    [{open: "08:00", close: "17:00"}]
+  tuesday:   [{open: "08:00", close: "17:00"}]
+  wednesday: [{open: "08:00", close: "19:00"}]
+  thursday:  [{open: "08:00", close: "17:00"}]
+  friday:    [{open: "08:00", close: "16:00"}]
+  saturday:  [{open: "09:00", close: "13:00"}]
+  sunday:    []
+hours_notes: >-
+  Closed on Alberta statutory holidays. The clinic closes from 12:00 to 12:30
+  for lunch on weekdays, but phones are still answered.
+# Alberta general holidays, Nov 2026 – Dec 2027. Update yearly.
+closed_dates:
+  - 2026-11-11   # Remembrance Day
+  - 2026-12-25   # Christmas Day
+  - 2027-01-01   # New Year's Day
+  - 2027-02-15   # Family Day
+  - 2027-03-26   # Good Friday
+  - 2027-05-24   # Victoria Day
+  - 2027-07-01   # Canada Day
+  - 2027-09-06   # Labour Day
+  - 2027-10-11   # Thanksgiving
+  - 2027-11-11   # Remembrance Day
+  - 2027-12-25   # Christmas Day
+
+services:
+  - id: standard_visit
+    name: Family doctor appointment
+    duration_minutes: 15
+    description: A regular visit with your family doctor for one health concern.
+  - id: extended_visit
+    name: Extended appointment
+    duration_minutes: 30
+    description: For multiple concerns, annual physicals or complex follow-ups.
+  - id: virtual_visit
+    name: Phone appointment
+    duration_minutes: 15
+    description: Your doctor calls you at the booked time. Good for follow-ups and results discussions.
+  - id: well_baby
+    name: Well-baby and child check
+    duration_minutes: 20
+    description: Routine growth and development checks for infants and children.
+  - id: prenatal
+    name: Prenatal visit
+    duration_minutes: 20
+    description: Routine pregnancy care visit.
+  - id: vaccination
+    name: Vaccination
+    duration_minutes: 10
+    description: Routine adult and childhood immunizations, plus seasonal flu shots in the fall.
+  - id: pap_test
+    name: Pap test
+    duration_minutes: 20
+    description: Cervical cancer screening.
+  - id: drivers_medical
+    name: Driver's medical exam
+    duration_minutes: 30
+    description: Medical exam for a driver's licence. Not covered by Alberta Health Care.
+    notes: There is a fee for this exam. Please bring your glasses or contacts and the form from the registry.
+  - id: walk_in
+    name: Same-day walk-in
+    duration_minutes: 15
+    description: Limited same-day spots for existing patients.
+    bookable: false
+    notes: Walk-in spots are first come, first served starting at 8 a.m. They cannot be booked by phone.
+
+faqs:
+  - topic: parking
+    question: Where do I park?
+    answer: >-
+      Free parking is available in the lot behind the building for up to two hours.
+      There is also paid street parking on Maplegate Drive.
+  - topic: insurance
+    question: Do I need my health card? Is my visit covered?
+    answer: >-
+      Please bring your Alberta Health Care card to every visit. Most visits are covered by
+      Alberta Health Care. Some services are not covered, like driver's medicals, sick notes
+      and some forms, and those have a fee. The front desk can give you the current fees.
+  - topic: new_patients
+    question: Are you accepting new patients?
+    answer: >-
+      We are accepting new patients on a waitlist. I can take your name and number and the
+      front desk will call you when a spot opens.
+  - topic: walk_in
+    question: Do you take walk-ins?
+    answer: >-
+      We have a limited number of same-day walk-in spots for existing patients, first come,
+      first served starting at 8 a.m. They can't be booked by phone.
+  - topic: prescriptions
+    question: Can I get a prescription refill?
+    answer: >-
+      Prescription refills need to be reviewed by your doctor. I can take a message with your
+      name, phone number and the medication name, and the clinic will follow up. For an urgent
+      refill, your pharmacist may also be able to help.
+  - topic: test_results
+    question: Are my test results in?
+    answer: >-
+      I'm not able to access or discuss test results. I can take a message and a nurse or the
+      front desk will call you back, or I can book a phone appointment with your doctor.
+  - topic: cancellation_policy
+    question: What is your cancellation policy?
+    answer: >-
+      Please give us at least 24 hours' notice if you need to cancel or reschedule. Missed
+      appointments without notice may be charged a fee.
+  - topic: accessibility
+    question: Is the clinic wheelchair accessible?
+    answer: >-
+      Yes. The building has a ramp at the main entrance and an elevator to the second floor,
+      and our washrooms are accessible.
+  - topic: forms_and_notes
+    question: Can I get a sick note or have a form filled out?
+    answer: >-
+      Yes, but sick notes and most forms are not covered by Alberta Health Care and have a fee.
+      You'll need to book an appointment so the doctor can see you.
+
+# Must disclose AI + recording; validated at startup.
+greeting: >-
+  Thank you for calling Maplegate Family Clinic. I'm the clinic's AI assistant, and this call
+  is recorded and transcribed for quality and record-keeping. If this is a medical emergency,
+  please hang up and call 9-1-1. How can I help you today?
+
+recording:
+  enabled: true
+
+escalation:
+  transfer_number: "+14035550199"      # front desk urgent line (fictional)
+  transfer_announcement: "Please hold while I transfer you to a member of our clinic team."
+  always_human:
+    - Questions about test or lab results
+    - A possible reaction to a medication
+    - A worsening symptom the caller is worried about
+    - Complaints about care or staff
+    - Requests from pharmacies, hospitals or other clinics
+  extra_urgent_phrases: []
+
+voice:
+  tts_provider: cartesia
+  stt_provider: deepgram
+  voice_id: null                       # set to a Cartesia voice ID before running the agent
+  language: en-CA
+
+booking:
+  provider: manual                     # staff confirm every request from the dashboard
+  min_notice_hours: 2
+  max_days_ahead: 60
+  options: {}
+
+notifications:
+  staff_emails: ["frontdesk@maplegate-clinic.example.com"]
+  staff_sms: []
+
+limits:
+  max_turns: 40
+  max_call_seconds: 900
+  silence_reprompt_seconds: 8
+  silence_hangup_seconds: 30

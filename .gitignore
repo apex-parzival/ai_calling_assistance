@@ -1,0 +1,38 @@
+# Secrets — never commit. Each clinic's .env lives next to its clinic.yaml.
+.env
+*.env
+!.env.example
+clinics/*/.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Node / Next.js
+node_modules/
+dashboard/.next/
+*.tsbuildinfo
+dashboard/out/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local data
+*.log
+recordings/
+
+# Portable dev Postgres (no Docker)
+.devdb/
+*.db
+var/

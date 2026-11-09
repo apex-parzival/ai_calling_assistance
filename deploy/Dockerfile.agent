@@ -1,0 +1,20 @@
+# Agent worker image. Build from the repo root:  docker build -f deploy/Dockerfile.agent .
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    CLINICS_ROOT=/app/clinics
+
+WORKDIR /app
+RUN useradd --create-home --uid 1000 app
+
+COPY pyproject.toml ./
+COPY core ./core
+RUN pip install ".[agent]"
+
+USER app
+# Pre-download model files (Silero VAD) into the image so the first call isn't slow.
+RUN python -m livekit.agents download-files || true
+CMD ["python", "-m", "core.agent", "start"]

@@ -1,0 +1,74 @@
+# Local stack. Run from the repo root:
+#   docker compose -f deploy/docker-compose.yml up --build                    # postgres + backend + dashboard
+#   docker compose -f deploy/docker-compose.yml --profile agent up --build    # + voice agent (needs vendor keys)
+# Pick a clinic with CLINIC=<folder under clinics/> (default: demo_clinic).
+
+name: clinic-receptionist
+
+x-clinic: &clinic
+  env_file:
+    - path: ../clinics/${CLINIC:-demo_clinic}/.env
+      required: true
+  volumes:
+    - ../clinics/${CLINIC:-demo_clinic}/clinic.yaml:/app/clinics/${CLINIC:-demo_clinic}/clinic.yaml:ro
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      # Local development only. Production uses RDS with credentials from Secrets Manager.
+      POSTGRES_USER: receptionist
+      POSTGRES_PASSWORD: receptionist
+      POSTGRES_DB: receptionist
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U receptionist -d receptionist"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    <<: *clinic
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    environment:
+      CLINIC: ${CLINIC:-demo_clinic}
+      # Overrides the localhost URL in the clinic .env so the container reaches the postgres service.
+      DATABASE_URL: postgresql+asyncpg://receptionist:receptionist@postgres:5432/receptionist
+    command: ["sh", "-c", "alembic upgrade head && uvicorn backend.main:create_app --factory --host 0.0.0.0 --port 8000"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.dashboard
+      args:
+        NEXT_PUBLIC_BACKEND_URL: http://localhost:8000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - backend
+
+  agent:
+    <<: *clinic
+    profiles: ["agent"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.agent
+    environment:
+      CLINIC: ${CLINIC:-demo_clinic}
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  pgdata:
