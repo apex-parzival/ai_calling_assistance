@@ -77,6 +77,34 @@ def test_llm_extra_body_must_be_a_json_object(clean_env, clinics_root, value):
     assert any(p.startswith("LLM_EXTRA_BODY") for p in problems(s, ["agent"]))
 
 
+def test_local_ollama_accepts_a_short_key(clean_env, clinics_root):
+    s = settings_with(clean_env, clinics_root, LLM_BASE_URL="http://localhost:11434/v1",
+                      LLM_API_KEY="ollama", LLM_LOCALHOST_ALIAS=None)
+    assert problems(s, ["agent"]) == []
+    assert s.llm_url == "http://localhost:11434/v1"
+
+
+def test_local_llm_still_needs_some_key(clean_env, clinics_root):
+    s = settings_with(clean_env, clinics_root, LLM_BASE_URL="http://127.0.0.1:11434/v1", LLM_API_KEY=None)
+    assert problems(s, ["agent"]) == ["LLM_API_KEY: missing (agent)"]
+
+
+def test_hosted_llm_still_needs_a_real_key(clean_env, clinics_root):
+    s = settings_with(clean_env, clinics_root, LLM_API_KEY="ollama")
+    assert any(p.startswith("LLM_API_KEY:") for p in problems(s, ["agent"]))
+
+
+def test_localhost_llm_rewritten_inside_docker(clean_env, clinics_root):
+    s = settings_with(clean_env, clinics_root, LLM_BASE_URL="http://localhost:11434/v1",
+                      LLM_API_KEY="ollama", LLM_LOCALHOST_ALIAS="host.docker.internal")
+    assert s.llm_url == "http://host.docker.internal:11434/v1"
+
+
+def test_hosted_llm_url_not_rewritten(clean_env, clinics_root):
+    s = settings_with(clean_env, clinics_root, LLM_LOCALHOST_ALIAS="host.docker.internal")
+    assert s.llm_url == "https://openrouter.ai/api/v1"
+
+
 def test_sendgrid_channel_requires_its_keys(clean_env, clinics_root):
     s = settings_with(clean_env, clinics_root, NOTIFY_CHANNEL="sendgrid")
     found = problems(s, ["notify"])

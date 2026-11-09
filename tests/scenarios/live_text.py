@@ -151,7 +151,7 @@ async def simulated_caller(settings: Settings, greeting: str, goal: str,
     body = {**settings.llm_extra, "model": settings.llm_model, "temperature": 0.4, "max_tokens": 80,
             "messages": [{"role": "user", "content": prompt + ("\n/no_think" if settings.llm_disable_thinking else "")}]}
     async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.post(f"{settings.llm_base_url.rstrip('/')}/chat/completions", json=body,
+        r = await c.post(f"{settings.llm_url.rstrip('/')}/chat/completions", json=body,
                          headers={"Authorization": f"Bearer {settings.llm_api_key.get_secret_value()}"})
         r.raise_for_status()
         text = r.json()["choices"][0]["message"]["content"] or ""

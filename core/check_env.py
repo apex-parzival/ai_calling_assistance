@@ -67,10 +67,10 @@ def live_checks(s: Settings, clinic: ClinicConfig) -> list[tuple[str, bool, str]
                 run("Cartesia voice", lambda: c.get(f"https://api.cartesia.ai/voices/{clinic.voice.voice_id}", headers=headers))
             else:
                 run("Cartesia", lambda: c.get("https://api.cartesia.ai/voices", headers=headers))
-        if s.llm_api_key and s.llm_base_url and s.llm_model:
+        if s.llm_api_key and s.llm_url and s.llm_model:
             # A 1-token completion proves the key, the base URL and the model name together.
             run(f"LLM ({s.llm_model})", lambda: c.post(
-                f"{s.llm_base_url.rstrip('/')}/chat/completions",
+                f"{s.llm_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {_secret(s.llm_api_key)}"},
                 json={**s.llm_extra, "model": s.llm_model, "max_tokens": 1,
                       "messages": [{"role": "user", "content": "ping"}]},

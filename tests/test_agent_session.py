@@ -69,11 +69,11 @@ def make_session(clean_env, clinics_root, tmp_path, backend_calls):
         backend_calls.append((request.url.path, json.loads(request.content or b"{}")))
         return httpx.Response(200, json={"id": str(uuid.uuid4())})
 
-    async def make(replies: list[str]):
+    async def make(replies: list[str], warmup_llm=None):
         scripted = ScriptedLLM(replies)
         backend = BackendClient(settings, spool_dir=tmp_path / "spool", transport=httpx.MockTransport(handler))
         state = CallState()
-        agent = Receptionist(clinic, settings, backend, state, job_ctx=None)
+        agent = Receptionist(clinic, settings, backend, state, job_ctx=None, warmup_llm=warmup_llm)
         session = AgentSession(llm=scripted)
         await session.start(agent)
         return session, agent, scripted
@@ -229,3 +229,73 @@ async def test_turn_limit_ends_call_without_llm(make_session):
         await result
     assert scripted.requests == []
     assert "follow up" in agent._goodbye
+
+
+@pytest.mark.anyio
+async def test_detached_task_keeps_context_but_not_speech_handle():
+    """end_call runs in a detached task; it must still see LiveKit's HTTP session (delete_room
+    needs it) but not the current speech handle (waiting on its own speech would deadlock)."""
+    import contextvars
+
+    from livekit.agents.voice.agent_activity import _SpeechHandleContextVar
+
+    from core.agent import _detached
+
+    other = contextvars.ContextVar("other_for_test")
+    other.set("http-session")
+    _SpeechHandleContextVar.set(object())
+
+    async def look():
+        return other.get(None), _SpeechHandleContextVar.get(None)
+
+    assert await _detached(look()) == ("http-session", None)
+
+
+class _RecordingWarmup(ScriptedLLM):
+    def __init__(self) -> None:
+        super().__init__(["Okay."])
+        self.tools: list = []
+
+    def chat(self, *, chat_ctx, tools=None, **kw):
+        self.tools.append(list(tools or []))
+        return super().chat(chat_ctx=chat_ctx, tools=tools, **kw)
+
+
+@pytest.mark.anyio
+async def test_llm_cache_warmed_with_the_real_prompt_and_tools(make_session):
+    import asyncio
+
+    warm = _RecordingWarmup()
+    session, agent, scripted = await make_session(["We open at 8."], warmup_llm=warm)
+    async with session:
+        await asyncio.sleep(0.2)  # the warm-up runs alongside the greeting
+        result = await session.run(user_input="what time do you open?")
+        await result
+    assert len(warm.requests) == 1
+    system = [m for m in warm.requests[0].items if getattr(m, "role", None) == "system"]
+    assert system and agent.clinic.name in system[0].text_content
+    names = {getattr(t, "id", None) or getattr(t, "name", None) for t in warm.tools[0]}
+    assert {"book_appointment", "take_message", "transfer_to_human"} <= names
+    # the real request starts with the same system prompt the warm-up sent
+    real_system = [m for m in scripted.requests[0].items if getattr(m, "role", None) == "system"]
+    assert real_system[0].text_content == system[0].text_content
+
+
+@pytest.mark.anyio
+async def test_failed_warm_up_never_sets_off_llm_down_fallback(make_session):
+    import asyncio
+
+    failing = FailingLLM([])
+    session, agent, _ = await make_session(["We open at 8."], warmup_llm=failing)
+    said = []
+    session.on("conversation_item_added",
+               lambda ev: said.append(ev.item.text_content) if ev.item.role == "assistant" else None)
+    async with session:
+        await asyncio.sleep(0.3)
+        result = await session.run(user_input="what time do you open?")
+        await result
+    assert len(failing.requests) == 1  # the warm-up ran and failed
+    assert agent.state.failures["llm"] == 0
+    assert agent.state.outcome != "system_error"
+    assert not [t for t in said if "technical problem" in (t or "")]
+    assert any("We open at 8." in (t or "") for t in said)

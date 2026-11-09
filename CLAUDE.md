@@ -27,7 +27,7 @@ A patient calls the clinic's number. The AI answers, understands speech, replies
 | Decision | Choice | Consequence |
 | --- | --- | --- |
 | First milestone | Full local vertical slice | Agent + backend + Postgres + dashboard all run locally before any cloud or telephony work |
-| LLM during build | Hosted Qwen via Groq or OpenRouter | OpenAI-compatible, so swapping to self-hosted vLLM later is a `base_url` change |
+| LLM during build | **Ollama (Qwen 2.5 7B) locally + Groq for timed tests** | Both OpenAI-compatible, so switching between them — and to self-hosted vLLM later — is a `LLM_BASE_URL` change |
 | Vendor accounts | None yet | Phase 0 is a signup checklist and gates everything else |
 | Voice stack in production | Cloud APIs (Deepgram + Cartesia) | Cheapest to run; requires DPAs, zero-retention and the clinic's privacy sign-off before go-live |
 
@@ -46,7 +46,7 @@ A patient calls the clinic's number. The AI answers, understands speech, replies
 | Real-time media | LiveKit Cloud | Streams audio between caller and agent |
 | Agent framework | LiveKit Agents (Python) | Logic, turn-taking, tools |
 | STT | Deepgram (Nova) | Speech to text, WebSocket streaming |
-| LLM | Qwen 2.5 / Qwen 3 (7B–14B) via Groq or OpenRouter | Decides what to say and which tool to call |
+| LLM | Qwen 2.5 / Qwen 3 (7B–14B) — Ollama locally in dev, Groq for timed tests, vLLM or a paid API in prod | Decides what to say and which tool to call |
 | TTS | Cartesia | Text to voice, WebSocket streaming |
 | VAD | Silero (built into LiveKit) | Detects start/stop of speech |
 | Backend | FastAPI (Python) | Tool endpoints, booking calls, logging |
@@ -181,11 +181,23 @@ Each one calls the FastAPI backend over HTTP. None of them touch the booking sys
 | LiveKit Cloud | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Free tier |
 | Deepgram | `DEEPGRAM_API_KEY` | ~$200 free credit |
 | Cartesia | `CARTESIA_API_KEY` + a voice ID | Free tier |
-| Groq or OpenRouter | `LLM_API_KEY` + `LLM_BASE_URL` | Free tier / cents |
+| Groq | `LLM_API_KEY` + `LLM_BASE_URL` (`https://api.groq.com/openai/v1`) | Free tier, no card |
 | Twilio | Account SID + auth token (number comes in Phase 2) | Trial credit (~$15) |
 | SendGrid or Twilio SMS | Staff notifications | Free tier |
 
-**Local tooling:** Python 3.11+, Node.js 20+, Docker Desktop, Git.
+**Local tooling:** Python 3.11+, Node.js 20+, Docker Desktop, Git, and **Ollama** with `ollama pull qwen2.5:7b` (~5 GB download, needs ~8 GB free RAM).
+
+**LLM provider strategy during development:**
+
+| Use | Provider | `LLM_BASE_URL` | Why |
+| --- | --- | --- | --- |
+| Everyday iteration | Ollama (local) | `http://localhost:11434/v1` | Free, no rate limits, offline, no data leaves the machine |
+| Latency-realistic test passes | Groq | `https://api.groq.com/openai/v1` | Fast enough to reflect production timing |
+| Production | Paid API or self-hosted vLLM | varies | Free tiers have no SLA and may train on inputs |
+
+Groq's free tier is **8,000 tokens per minute**. A voice call resends the whole history each turn, so one 3-minute call can run 15–30K tokens and rate-limit itself mid-call. Use Groq for short, timed scenarios; use Ollama for everything else. Both are OpenAI-compatible, so only `LLM_BASE_URL` and `LLM_API_KEY` change — `core/providers/llm.py` must make that switch a config change, never a code change.
+
+Avoid Cerebras: it now requires a payment method even for its trial credit, and has no permanent free tier. OpenRouter's `:free` models work at $0 but are capped at 50 requests/day until $10 of lifetime credit is purchased.
 
 **Claude Code does:** scaffold the repo tree, `.env.example`, `clinic.yaml` for a fictional demo clinic, `docker-compose.yml`, README with run instructions.
 
@@ -201,7 +213,7 @@ The whole system on one laptop, end to end, no phone number, no cloud. A browser
 - **1.2 Database** — Postgres in Docker, the four tables above, Alembic migrations.
 - **1.3 FastAPI backend** — `POST /calls`, `GET /calls` with filters, `PATCH /calls/{id}` (status, notes, assignment), `/appointments`, `/auth` with session cookies, `/ws` WebSocket pushing new calls to the dashboard. Every write hits `audit_log`.
 - **1.4 Booking adapter** — `BookingProvider` interface: `check_availability`, `create_request`, `cancel_request`. Ship `manual.py` first: records the request, emails/SMSes the front desk for confirmation.
-- **1.5 The agent** — LiveKit `AgentSession` with Deepgram STT, OpenAI plugin pointed at Groq/OpenRouter, Cartesia TTS, Silero VAD. System prompt assembled from `clinic.yaml`. **AI disclosure and recording notice in the greeting from the first build**, not bolted on later.
+- **1.5 The agent** — LiveKit `AgentSession` with Deepgram STT, OpenAI plugin pointed at `LLM_BASE_URL` (Ollama locally, Groq for timed runs), Cartesia TTS, Silero VAD. System prompt assembled from `clinic.yaml`. **AI disclosure and recording notice in the greeting from the first build**, not bolted on later.
 - **1.6 The five tools** — as specified in section 7.
 - **1.7 Guardrails** — prompt rules *plus* code checks: never give medical advice; route clinical questions to staff; detect emergency language and tell the caller to hang up and dial 911; hard limit on conversation turns; graceful behaviour on silence and on tool failure.
 - **1.8 Dashboard** — Next.js: login, call list (newest first, filters for New / Urgent / Today), call detail with summary + transcript + requested appointment, actions to mark handled / add note / assign, live WebSocket updates with a sound.
@@ -351,7 +363,7 @@ None of these block Phase 1.
 | LiveKit Cloud | ~$10 |
 | Deepgram STT | $4–8 |
 | Cartesia TTS | $20–80 |
-| Hosted Qwen LLM | $1–5 |
+| Hosted Qwen LLM (paid tier in prod) | $1–5 |
 | Agent + backend on AWS | $20–60 |
 | RDS PostgreSQL (small) | $15–30 |
 | **Total** | **$80–200** |

@@ -18,6 +18,7 @@ import functools
 import logging
 import os
 import sys
+import time
 from typing import Any
 
 from livekit import rtc
@@ -63,15 +64,24 @@ def config() -> tuple[Settings, ClinicConfig]:
 
 
 def _detached(coro) -> asyncio.Task:
-    # Fresh contextvars: a task spawned from inside a tool must not inherit the tool's
-    # speech context, or waiting on its own speech would deadlock.
-    return asyncio.create_task(coro, context=contextvars.Context())
+    # A task spawned from inside a tool must not inherit the tool's speech handle, or waiting
+    # on its own speech would deadlock. Everything else in the context is kept: LiveKit's HTTP
+    # session lives in a context variable, and without it ending the call (delete_room) fails
+    # and the caller is left on a silent line.
+    ctx = contextvars.copy_context()
+    try:
+        from livekit.agents.voice.agent_activity import _SpeechHandleContextVar
+        ctx.run(_SpeechHandleContextVar.set, None)
+    except ImportError:  # private name; if LiveKit renames it, fall back to an empty context
+        ctx = contextvars.Context()
+    return asyncio.create_task(coro, context=ctx)
 
 
 class Receptionist(ReceptionistTools, Agent):
     def __init__(self, clinic: ClinicConfig, settings: Settings, backend: BackendClient, state: CallState,
-                 job_ctx: JobContext) -> None:
+                 job_ctx: JobContext, warmup_llm: llm.LLM | None = None) -> None:
         self.clinic = clinic
+        self._warmup_llm = warmup_llm
         self.settings = settings
         self.backend = backend
         self.state = state
@@ -90,6 +100,32 @@ class Receptionist(ReceptionistTools, Agent):
         self.session.on("error", self._on_error)
         # Uninterruptible: the AI disclosure and recording notice must be heard in full.
         self.session.say(self.clinic.greeting, allow_interruptions=False)
+        if self._warmup_llm is not None:
+            _detached(self._warm_llm_cache())
+
+    async def _warm_llm_cache(self) -> None:
+        """Make the LLM read the system prompt and tool list while the greeting plays.
+
+        The first reply of a call otherwise pays for reading the whole prompt (~1.6 s on local
+        Ollama). The provider keeps what it read (Ollama/vLLM prefix cache, hosted prompt caching),
+        and every real request of the call starts with exactly these messages and tools, so the
+        first answer only has to read the caller's words. The request stops at its first token.
+
+        Uses its own LLM client (same settings), so a failure here can't reach the session's
+        error handling and set off the "LLM is down" fallback. It only ever costs latency.
+        """
+        started = time.perf_counter()
+        try:
+            async with asyncio.timeout(15):
+                tools = self._get_activity_or_raise().tools
+                async with self._warmup_llm.chat(
+                        chat_ctx=self.chat_ctx.copy(), tools=tools,
+                        conn_options=APIConnectOptions(max_retry=0, timeout=15)) as stream:
+                    async for _ in stream:
+                        break  # first token = the prompt has been read
+            log.info("llm prompt cache warmed in %.2fs", time.perf_counter() - started)
+        except Exception as e:  # noqa: BLE001 - never let a warm-up affect the call
+            log.warning("llm warm-up skipped (%s: %s); first reply will just be slower", type(e).__name__, e)
 
     def _on_error(self, ev) -> None:
         """The LLM failed for good (retries used up): never leave the caller in silence."""
@@ -400,7 +436,8 @@ async def entrypoint(ctx: JobContext) -> None:
         "started_at": state.started_at.isoformat(),
     }))
 
-    agent = Receptionist(clinic, settings, backend, state, ctx)
+    agent = Receptionist(clinic, settings, backend, state, ctx,
+                         warmup_llm=make_llm(settings) if settings.llm_warmup else None)
     session = AgentSession(
         stt=make_stt(clinic, settings),
         llm=make_llm(settings),

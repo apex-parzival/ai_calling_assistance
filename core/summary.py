@@ -36,7 +36,7 @@ async def summarize(settings: Settings, transcript: list[dict]) -> tuple[str, st
     }
     try:
         async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.post(f"{settings.llm_base_url.rstrip('/')}/chat/completions", json=body,
+            r = await c.post(f"{settings.llm_url.rstrip('/')}/chat/completions", json=body,
                              headers={"Authorization": f"Bearer {settings.llm_api_key.get_secret_value()}"})
             r.raise_for_status()
             content = r.json()["choices"][0]["message"]["content"] or ""

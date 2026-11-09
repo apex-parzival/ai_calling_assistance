@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -62,6 +63,11 @@ class Settings(BaseSettings):
     # Extra JSON fields sent with every chat completion, for provider-specific routing.
     # OpenRouter example: {"provider":{"sort":"latency","require_parameters":true},"reasoning":{"enabled":false}}
     llm_extra_body: str | None = None
+    # Set inside Docker (deploy/docker-compose.yml) so a local LLM URL such as
+    # http://localhost:11434/v1 (Ollama on the developer's machine) reaches the host, not the container.
+    llm_localhost_alias: str | None = None
+    # Read the system prompt into the LLM's cache while the greeting plays (core/agent.py).
+    llm_warmup: bool = True
 
     # telephony (Phase 2) and SMS
     twilio_account_sid: str | None = None
@@ -85,6 +91,27 @@ class Settings(BaseSettings):
     def llm_extra(self) -> dict:
         """LLM_EXTRA_BODY parsed. Validated by RULES, so a bad value fails at startup."""
         return json.loads(self.llm_extra_body) if self.llm_extra_body else {}
+
+    @property
+    def llm_url(self) -> str | None:
+        """LLM_BASE_URL as this process must call it (localhost rewritten inside Docker)."""
+        url = self.llm_base_url
+        if url and self.llm_localhost_alias and _is_local_url(url):
+            parts = urlsplit(url)
+            netloc = self.llm_localhost_alias + (f":{parts.port}" if parts.port else "")
+            url = urlunsplit(parts._replace(netloc=netloc))
+        return url
+
+
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _is_local_url(url: str | None) -> bool:
+    """True for an LLM on this machine (Ollama), which ignores the API key."""
+    try:
+        return bool(url) and urlsplit(url).hostname in _LOCAL_HOSTS
+    except ValueError:
+        return False
 
 
 def load_settings(**overrides) -> Settings:
@@ -136,7 +163,9 @@ RULES: tuple[Rule, ...] = (
     Rule("livekit_api_secret", "agent", _min_len(20)),
     Rule("deepgram_api_key", "agent", _min_len(20)),
     Rule("cartesia_api_key", "agent", _min_len(20)),
-    Rule("llm_api_key", "agent", _min_len(20)),
+    Rule("llm_api_key", "agent", _min_len(20), when=lambda s: not _is_local_url(s.llm_base_url)),
+    # Ollama ignores the key, but the OpenAI client needs one: any string, e.g. "ollama".
+    Rule("llm_api_key", "agent", when=lambda s: _is_local_url(s.llm_base_url)),
     Rule("llm_base_url", "agent", _regex(r"^https?://", "an http(s) URL ending in /v1 or /openai/v1")),
     Rule("llm_model", "agent"),
     Rule("llm_extra_body", "agent", _json_object, when=lambda s: bool(s.llm_extra_body)),

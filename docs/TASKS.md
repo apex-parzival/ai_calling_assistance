@@ -27,7 +27,17 @@ Updated after every step. `[x]` done · `[>]` working on it now · `[ ]` next.
 | [x] | Update this list, README, test plan, notes | |
 | [ ] | **After you add OpenRouter credit:** voice calls interrupt, booking, silence; full voice run; latency → `docs/latency-log.md` | Claude |
 | [ ] | Re-run live-LLM text scenarios (needs credit) | Claude |
-| [ ] | Commit and push (waiting for your OK) | Claude |
+| [x] | Commit and push | `f2c2d31` on `main` |
+| [x] | Ollama: `Modelfile` → `qwen-clinic` (8k context, temperature 0.4); OpenAI endpoint + tool calling verified | 3/3 tool calls; ~0.2 s to first token on the RTX 5050 |
+| [x] | Ollama settings: `OLLAMA_KEEP_ALIVE=2h`, `OLLAMA_NUM_PARALLEL=1` (user env vars) | |
+| [x] | Project wired to Ollama: short key accepted for a local LLM; Docker agent reaches it via `host.docker.internal` (`LLM_LOCALHOST_ALIAS`) | 5 tests added |
+| [x] | Text scenarios on `qwen-clinic` | 19/22; multi-step flows pass ~1 in 3 (code checks blocked every bad save) |
+| [x] | Voice run on `qwen-clinic`: greeting, noise, **interrupt, booking**, emergency, advice pass | voice booking on dashboard 0.05 s after hang-up |
+| [x] | Fixed, found by the silence call: the agent could never end a call itself (silence, limits, LLM-down goodbye): `delete_room` lost LiveKit's HTTP session | test added; silence call now passes; 204 tests |
+| [x] | Update README, `.env.example`, test plan, this list | |
+| [x] | First-reply latency: warm the LLM's prompt cache while the greeting plays (`LLM_WARMUP`, on by default; own client, so a failed warm-up can't set off the LLM-down fallback) | first-reply LLM time 1.6 s → 0.12–0.50 s; 2 tests; 206 pass |
+| [x] | Voice run with the warm-up | 6/7 (booking: 7B model mistake, passed the run before); agent-side median **1.39 s**; caller hears median 2.01 s |
+| [x] | Commit and push the Ollama work and warm-up | pushed to `main` |
 
 `[x]` done and verified · `[~]` built, but not yet verified the way the exit criterion asks · `[ ]` not started.
 **Who** says who has to do it: *you* (needs your accounts, card, 2FA or admin rights), *Claude*, or *clinic*.
@@ -36,13 +46,13 @@ Updated after every step. `[x]` done · `[>]` working on it now · `[ ]` next.
 
 | Phase | Done | Partly | To do | Status |
 |---|---|---|---|---|
-| 0 Accounts and prerequisites | 13 | 0 | 1 | **Exit check passed** (only Twilio left, needed in Phase 2) |
-| 1 Local vertical slice | 26 | 3 | 2 | Real voice calls working; blocked on OpenRouter credit for the last runs |
+| 0 Accounts and prerequisites | 14 | 0 | 1 | **Exit check passed** (only Twilio left, needed in Phase 2) |
+| 1 Local vertical slice | 28 | 1 | 2 | 4 of 5 exit criteria passed; latency still over 1.5 s |
 | 2 Telephony | 0 | 1 | 10 | Not started (blocked by Phase 1) |
 | 3 Booking integration | 1 | 0 | 3 | Blocked: clinic hasn't named its booking system |
 | 4 Hardening and compliance | 3 | 3 | 12 | Not started |
 | 5 Canadian deployment | 1 | 0 | 9 | Not started |
-| **Total** | **44** | **7** | **37** | **44 of 88 items done (50%)** |
+| **Total** | **47** | **5** | **37** | **47 of 89 items done (53%)** |
 
 Phases 2–5 have bigger items than Phase 0–1, so by effort it's closer to a third done.
 
@@ -65,6 +75,7 @@ Phases 2–5 have bigger items than Phase 0–1, so by effort it's closer to a t
 | [x] | LiveKit API key + secret (new key), validated live | you |
 | [x] | WSL 2 + Docker Desktop installed | you |
 | [x] | `docker compose up`: Postgres starts, backend health 200 with database ok (**Phase 0 exit check passed**) | Claude |
+| [x] | Ollama + `qwen2.5:7b`, project variant `qwen-clinic` built from `Modelfile` | you / Claude |
 | [ ] | Twilio account SID + auth token (not needed until Phase 2) | you |
 
 ## Phase 1: Full local vertical slice
@@ -109,9 +120,9 @@ Phases 2–5 have bigger items than Phase 0–1, so by effort it's closer to a t
 
 | | Task | Who |
 |---|---|---|
-| [x] | 194 automated tests (no keys needed) | Claude |
+| [x] | 206 automated tests (no keys needed) | Claude |
 | [x] | Text-mode scenario runner against the real LLM: `python -m tests.scenarios.live_text`. 22/22 passed ([report](scenario-runs/)) | Claude |
-| [~] | Real voice calls through LiveKit with a synthetic caller (`tests/scenarios/voice_call.py`, in Docker): greeting (talked over), FAQ, noise, advice, emergency pass. Interrupt, booking, silence still to run (blocked on LLM credit) | Claude |
+| [x] | Real voice calls through LiveKit with a synthetic caller (`tests/scenarios/voice_call.py`, in Docker): all 7 pass (greeting talked over, FAQ, noise, interrupt, emergency, advice, booking, silence); run on local Ollama | Claude |
 | [ ] | One call by a human in the LiveKit Playground (real voice, real mic) | you |
 | [ ] | Add the Playground results to the log in `docs/phase1-testing.md` | you + Claude |
 
@@ -119,10 +130,10 @@ Phases 2–5 have bigger items than Phase 0–1, so by effort it's closer to a t
 
 | | Criterion | Evidence so far |
 |---|---|---|
-| [~] | Browser call books an appointment; on the dashboard within 1 s of hang-up | Real voice calls are saved 0.04–0.07 s after hang-up (was 22 s before today's fix). Booking works in text mode; voice booking run blocked on LLM credit. |
+| [x] | Browser call books an appointment; on the dashboard within 1 s of hang-up | Voice booking over LiveKit (synthetic caller, local Ollama): request in Postgres and on the dashboard 0.05 s after hang-up. A human Playground call is still on the list below. |
 | [x] | Emergency → 911 response every time, 10 attempts | 10/10 in code tests, 10/10 with the real LLM, and by real voice call (1.12 s). |
 | [x] | No medical advice in any scripted scenario | 0 advice in 22 real-LLM scenarios (4 of them advice bait). Re-check once by voice. |
-| [~] | Median reply latency under 1.5 s, measured and written down | Real calls, agent-side: ~1.5 s when the LLM is healthy (end-of-speech 0.58, STT 0.4, LLM 0.8, TTS 0.15); caller hears ~1.9 s. Measured from India against US-hosted LLM. Needs a clean run once OpenRouter has credit. |
+| [~] | Median reply latency under 1.5 s, measured and written down | Local Ollama + prompt-cache warm-up: agent-side median 1.39 s (under target), but the caller hears a median of 2.01 s (WebRTC + playout on top). Slowest turns are the ones with a tool call. To decide: which number counts, and a re-run on the hosted model. |
 | [x] | Second clinic runs with no code change | `tests/test_second_clinic.py` |
 
 ## Phase 2: Telephony (blocked until Phase 1 passes)

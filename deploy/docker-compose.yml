@@ -66,6 +66,10 @@ services:
     environment:
       CLINIC: ${CLINIC:-demo_clinic}
       BACKEND_URL: http://backend:8000
+      # LLM_BASE_URL=http://localhost:11434/v1 (Ollama on this machine) -> reach the host, not the container
+      LLM_LOCALHOST_ALIAS: host.docker.internal
+    extra_hosts:
+      - host.docker.internal:host-gateway
     depends_on:
       backend:
         condition: service_healthy
@@ -85,6 +89,9 @@ services:
       CLINIC: ${CLINIC:-demo_clinic}
       DATABASE_URL: postgresql+asyncpg://receptionist:receptionist@postgres:5432/receptionist
       BACKEND_URL: http://backend:8000
+      LLM_LOCALHOST_ALIAS: host.docker.internal
+    extra_hosts:
+      - host.docker.internal:host-gateway
     volumes:
       - ../clinics/${CLINIC:-demo_clinic}/clinic.yaml:/app/clinics/${CLINIC:-demo_clinic}/clinic.yaml:ro
       - ../tests:/app/tests:ro

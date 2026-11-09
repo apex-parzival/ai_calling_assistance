@@ -14,7 +14,7 @@ def make_llm(settings: Settings):
 
     return openai.LLM(
         model=settings.llm_model,
-        base_url=settings.llm_base_url,
+        base_url=settings.llm_url,
         api_key=settings.llm_api_key.get_secret_value(),
         temperature=0.3,           # receptionist, not a poet
         parallel_tool_calls=False,  # small models get confused running tools in parallel
