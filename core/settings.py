@@ -54,7 +54,10 @@ class Settings(BaseSettings):
     livekit_api_key: str | None = None
     livekit_api_secret: SecretStr | None = None
     deepgram_api_key: SecretStr | None = None
+    # TTS: only the provider clinic.yaml selects (voice.tts_provider) is required; see TTS_RULES.
     cartesia_api_key: SecretStr | None = None
+    kokoro_base_url: str = "http://localhost:8880/v1"
+    kokoro_voice: str = "af_heart"  # used when clinic.yaml has no voice.voice_id
     llm_api_key: SecretStr | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
@@ -162,7 +165,6 @@ RULES: tuple[Rule, ...] = (
     Rule("livekit_api_key", "agent", _regex(r"^API\w+$", "a key starting with 'API'")),
     Rule("livekit_api_secret", "agent", _min_len(20)),
     Rule("deepgram_api_key", "agent", _min_len(20)),
-    Rule("cartesia_api_key", "agent", _min_len(20)),
     Rule("llm_api_key", "agent", _min_len(20), when=lambda s: not _is_local_url(s.llm_base_url)),
     # Ollama ignores the key, but the OpenAI client needs one: any string, e.g. "ollama".
     Rule("llm_api_key", "agent", when=lambda s: _is_local_url(s.llm_base_url)),
@@ -185,6 +187,18 @@ RULES: tuple[Rule, ...] = (
 )
 
 
+# What each TTS provider (clinic.yaml voice.tts_provider) needs. Checked only for the selected one,
+# so a Kokoro clinic starts without a Cartesia key and vice versa.
+TTS_RULES: dict[str, tuple[Rule, ...]] = {
+    "cartesia": (Rule("cartesia_api_key", "agent", _min_len(20)),),
+    "kokoro": (
+        Rule("kokoro_base_url", "agent", _regex(r"^https?://", "an http(s) URL ending in /v1, e.g. http://localhost:8880/v1")),
+        Rule("kokoro_voice", "agent"),
+    ),
+    "elevenlabs": (),
+}
+
+
 def _raw(settings: Settings, field: str) -> str | None:
     value = getattr(settings, field)
     if isinstance(value, SecretStr):
@@ -195,8 +209,25 @@ def _raw(settings: Settings, field: str) -> str | None:
     return value or None
 
 
-def problems(settings: Settings, groups: Iterable[Group]) -> list[str]:
-    """Return one human-readable line per missing or malformed setting."""
+def _check(settings: Settings, rule: Rule, why: str = "") -> str | None:
+    env = rule.field.upper()
+    value = _raw(settings, rule.field)
+    if value is None:
+        return f"{env}: missing ({rule.group}{why})"
+    if PLACEHOLDER.match(value):
+        return f"{env}: still a placeholder value ({rule.group}{why})"
+    if rule.check and (msg := rule.check(value)):
+        return f"{env}: {msg} ({rule.group}{why})"
+    return None
+
+
+def problems(settings: Settings, groups: Iterable[Group], *, tts_provider: str | None = None) -> list[str]:
+    """Return one human-readable line per missing or malformed setting.
+
+    `tts_provider` is the clinic's voice.tts_provider. Pass it whenever "agent" is checked: the
+    selected provider's settings are then required too. None skips the TTS check (for callers
+    that only want the other agent keys).
+    """
     wanted = set(groups)
     out: list[str] = []
     seen: set[str] = set()
@@ -204,14 +235,16 @@ def problems(settings: Settings, groups: Iterable[Group]) -> list[str]:
         if rule.group not in wanted or rule.field in seen or not rule.when(settings):
             continue
         seen.add(rule.field)
-        env = rule.field.upper()
-        value = _raw(settings, rule.field)
-        if value is None:
-            out.append(f"{env}: missing ({rule.group})")
-        elif PLACEHOLDER.match(value):
-            out.append(f"{env}: still a placeholder value ({rule.group})")
-        elif rule.check and (msg := rule.check(value)):
-            out.append(f"{env}: {msg} ({rule.group})")
+        if msg := _check(settings, rule):
+            out.append(msg)
+    if "agent" in wanted and tts_provider is not None:
+        if tts_provider not in TTS_RULES:
+            out.append(f"voice.tts_provider: unknown provider {tts_provider!r} in clinic.yaml (agent)")
+        elif tts_provider == "elevenlabs":
+            out.append("voice.tts_provider: 'elevenlabs' is not implemented yet; use cartesia or kokoro (agent)")
+        for rule in TTS_RULES.get(tts_provider, ()):
+            if msg := _check(settings, rule, f", needed because clinic.yaml voice.tts_provider is {tts_provider}"):
+                out.append(msg)
     if "notify" in wanted and settings.environment == "production" and settings.notify_channel == "log":
         out.append("NOTIFY_CHANNEL: 'log' is not allowed in production (notify)")
     if "backend" in wanted and settings.environment == "production" and (settings.database_url or "").startswith("sqlite"):
@@ -219,8 +252,8 @@ def problems(settings: Settings, groups: Iterable[Group]) -> list[str]:
     return out
 
 
-def require(settings: Settings, groups: Iterable[Group]) -> None:
-    found = problems(settings, groups)
+def require(settings: Settings, groups: Iterable[Group], *, tts_provider: str | None = None) -> None:
+    found = problems(settings, groups, tts_provider=tts_provider)
     if found:
         where = settings.clinic_dir / ".env"
         raise SettingsError(f"invalid settings (from {where} + environment):\n  - " + "\n  - ".join(found))

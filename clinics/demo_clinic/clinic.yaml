@@ -154,9 +154,12 @@ escalation:
   extra_urgent_phrases: []
 
 voice:
-  tts_provider: cartesia
+  # kokoro = self-hosted, for local development and testing (docker compose service `kokoro`).
+  # Production default is cartesia. To switch back: tts_provider: cartesia, plus the voice_id below.
+  tts_provider: kokoro
   stt_provider: deepgram
-  voice_id: 1242fb95-7ddd-44ac-8a05-9e8a22a6137d   # Cartesia "Cindy - Receptionist"
+  # Cartesia voice_id: 1242fb95-7ddd-44ac-8a05-9e8a22a6137d   # Cartesia "Cindy - Receptionist"
+  voice_id: af_heart                   # Kokoro voice (American English, female)
   language: en-CA
 
 booking:

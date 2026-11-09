@@ -39,7 +39,7 @@ docs/phase1-testing.md  Playground scenario script and latency procedure
 | --- | --- | --- |
 | [LiveKit Cloud](https://cloud.livekit.io) | Project URL + API key/secret | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` |
 | [Deepgram](https://console.deepgram.com) | API key | `DEEPGRAM_API_KEY` |
-| [Cartesia](https://play.cartesia.ai) | API key + pick a voice | `CARTESIA_API_KEY`; voice ID goes in `clinic.yaml` → `voice.voice_id` |
+| [Cartesia](https://play.cartesia.ai) | API key + pick a voice. Production TTS; only needed when `voice.tts_provider: cartesia` | `CARTESIA_API_KEY`; voice ID goes in `clinic.yaml` → `voice.voice_id` |
 | [Groq](https://console.groq.com) or [OpenRouter](https://openrouter.ai) | API key, a Qwen 7B–14B model ID | `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` |
 | [Twilio](https://console.twilio.com) | Account SID + auth token (number comes in Phase 2) | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` |
 | SendGrid or Twilio SMS | Staff notifications (optional during dev) | `NOTIFY_CHANNEL` + its keys |
@@ -97,6 +97,39 @@ Optional user environment variables: `OLLAMA_KEEP_ALIVE=2h` (no 10–30 s reload
 Measured on an RTX 5050 laptop: `qwen3-clinic` passed 22/22 text scenarios and 8/8 multi-step
 runs (booking, cancel, message, transfer), ~0.3 s to first token. `qwen2.5:7b` (`Modelfile`,
 `qwen-clinic`) is a little faster but completed the multi-step runs only 4 times in 8.
+
+## Text to speech: Kokoro locally, Cartesia in production
+
+`clinic.yaml` → `voice.tts_provider` picks the voice; switching is a config change only.
+
+| | Kokoro (local / testing) | Cartesia (production default) |
+|---|---|---|
+| `clinic.yaml` | `tts_provider: kokoro`, `voice_id: af_heart` | `tts_provider: cartesia`, `voice_id: <Cartesia voice ID>` |
+| `.env` | `KOKORO_BASE_URL` (default `http://localhost:8880/v1`), `KOKORO_VOICE` (used if no `voice_id`) | `CARTESIA_API_KEY` |
+| Runs | `kokoro` service in `docker-compose.yml` (starts with `--profile agent`), CPU image | Cartesia cloud API |
+
+The demo clinic currently uses Kokoro; its Cartesia voice ID is kept in a comment in `clinic.yaml`.
+Only the selected provider's settings are required: the agent and `check_env` name the missing
+variable if they aren't set. Inside docker compose the agent reaches Kokoro at `http://kokoro:8880/v1`.
+Locally Kokoro runs on the CPU, because the local Qwen model takes most of an 8 GB GPU; the GPU
+image (commented out in `docker-compose.yml`) is for the production server.
+
+The voice test caller (`voicetest`) speaks its own lines through Kokoro too (voice `am_michael`),
+so voice tests need no Cartesia credit; `--caller-tts cartesia` switches it back.
+
+Measured 2026-11-09 on the dev laptop's CPU: Kokoro takes 0.7–4 s to first audio (Cartesia
+~0.15 s), with pauses of over a second between sentences of a reply. Good for testing what the
+agent says, not for measuring latency.
+
+**Kokoro on an NVIDIA GPU** (0.12–0.5 s to first audio, 760 MB VRAM):
+
+```bash
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.kokoro-gpu.yml --profile agent up -d --build kokoro
+```
+
+It builds `deploy/Dockerfile.kokoro-gpu`, which swaps in a CUDA 12.8 PyTorch: the upstream GPU image
+fails on RTX 50xx (Blackwell) cards with "no kernel image is available". On an 8 GB laptop GPU it
+fits next to `qwen3-clinic`, but the two share the GPU, so the LLM gets slower.
 
 ## Run locally (no Docker)
 

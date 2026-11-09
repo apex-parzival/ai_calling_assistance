@@ -48,6 +48,17 @@ Updated after every step. `[x]` done · `[>]` working on it now · `[ ]` next.
 | [ ] | Found: when TTS fails, the caller hears nothing (dead air). Needs a fallback that doesn't depend on TTS (transfer / forward on a phone call); Phase 4 item, now proven real | Claude |
 | [ ] | After Cartesia credit: re-run voice interrupt, booking, silence on `qwen3-clinic` | Claude |
 | [x] | Commit and push the qwen3 work | pushed to `main` |
+| [x] | Kokoro TTS adapter (OpenAI plugin → Kokoro-FastAPI, raw PCM 24 kHz); Cartesia branch unchanged and still the production default | |
+| [x] | TTS settings per provider: Cartesia key required only when `tts_provider: cartesia`; agent, `check_env` and backend name the missing variable | 12 tests; 218 pass |
+| [x] | Demo clinic switched to Kokoro (`af_heart`); Cartesia voice ID kept in a comment; `CARTESIA_API_KEY` commented out in `.env` | |
+| [x] | `kokoro` service in docker-compose (CPU image, `--profile agent`); GPU variant commented out for production | |
+| [x] | `kokoro` service running (CPU image, 4.87 GB); `check_env --live` checks the voice exists (fixed for the newer voice-list format) | |
+| [x] | Voice test caller speaks through Kokoro too (`am_michael`; `--caller-tts cartesia` still available): no Cartesia credit needed for voice tests | |
+| [x] | Voice run, agent + caller on Kokoro: **7/7** (booking passed 2/2 after the test learned to wait through Kokoro's mid-reply pauses); interrupt stopped in 0.5 s | |
+| [x] | Kokoro on the GPU: `deploy/Dockerfile.kokoro-gpu` (CUDA 12.8 PyTorch for the RTX 5050) + `docker-compose.kokoro-gpu.yml` override; 760 MB VRAM, fits next to Qwen (6.8 of 8 GB) | TTS first audio 0.12–0.52 s |
+| [~] | Voice run with GPU Kokoro: 6/7 (interrupt 1.55 s vs 1.5 s limit); agent-side median 2.03 s: LLM slows when sharing the GPU | not yet under 1.5 s |
+| [ ] | Agent's answer to "tell me about your services" is weak (doesn't list them from clinic.yaml) | Claude |
+| [!] | Kokoro on this CPU is slow: TTS first audio 0.73–4.16 s (Cartesia 0.13–0.17 s), worst on booking turns; agent-side median 2.7 s; pauses over 1 s between sentences of one reply | fine for behaviour tests, not for latency. Measure latency on Cartesia or Kokoro on a GPU |
 
 `[x]` done and verified · `[~]` built, but not yet verified the way the exit criterion asks · `[ ]` not started.
 **Who** says who has to do it: *you* (needs your accounts, card, 2FA or admin rights), *Claude*, or *clinic*.

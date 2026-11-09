@@ -47,6 +47,7 @@ def clinics_root(tmp_path: Path, demo_raw: dict) -> Path:
 @pytest.fixture
 def clean_env(monkeypatch):
     """Remove any real settings from the process env so tests are hermetic."""
-    for key in [*VALID_ENV, "CLINIC", "CLINICS_ROOT", "ENVIRONMENT", "SENDGRID_API_KEY", "NOTIFY_FROM_EMAIL"]:
+    for key in [*VALID_ENV, "CLINIC", "CLINICS_ROOT", "ENVIRONMENT", "SENDGRID_API_KEY", "NOTIFY_FROM_EMAIL",
+                "KOKORO_BASE_URL", "KOKORO_VOICE", "LLM_LOCALHOST_ALIAS", "LLM_EXTRA_BODY", "LLM_DISABLE_THINKING"]:
         monkeypatch.delenv(key, raising=False)
     return monkeypatch

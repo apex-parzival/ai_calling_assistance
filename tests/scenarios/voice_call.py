@@ -3,9 +3,10 @@
     python -m core.agent dev                       # terminal 1 (and the backend running)
     python -m tests.scenarios.voice_call --write   # terminal 2; or name scenarios: faq booking
 
-Everything is real except the caller's voice: their lines are synthesized with Cartesia
-and published into the room as a microphone track, exactly like a browser caller. The agent
-hears it through Deepgram, answers with the real LLM and Cartesia voice, and records the call
+Everything is real except the caller's voice: their lines are synthesized (Kokoro by default,
+`--caller-tts cartesia` for Cartesia) and published into the room as a microphone track, exactly
+like a browser caller. The agent hears it through Deepgram, answers with the real LLM and the
+clinic's TTS (clinic.yaml voice.tts_provider), and records the call
 in the backend. This script listens to the agent's audio and transcripts and measures what a
 caller would experience: time from the end of their sentence to the first sound of the reply.
 
@@ -44,7 +45,9 @@ from .live_text import CLAIMS_CONFIRMED, END, simulated_caller
 
 RATE = 24000
 FRAME = RATE // 100                          # 10 ms
-CALLER_VOICE = "47c38ca4-5f35-497b-b1a3-415245fb35e1"   # Cartesia "Daniel", distinct from the agent's voice
+# The caller's voice, distinct from the agent's (af_heart / Cartesia "Cindy").
+CALLER_VOICE = {"kokoro": "am_michael", "cartesia": "47c38ca4-5f35-497b-b1a3-415245fb35e1"}  # Cartesia "Daniel"
+
 LOUD = 300                                   # int16 RMS above this counts as agent speech
 log = logging.getLogger("voice_call")
 
@@ -64,8 +67,9 @@ class Turn:
 
 
 class Caller:
-    def __init__(self, settings: Settings, room_name: str, noise: float = 0.0) -> None:
-        self.settings, self.room_name, self.noise = settings, room_name, noise
+    def __init__(self, settings: Settings, room_name: str, noise: float = 0.0, tts: str = "kokoro") -> None:
+        self.settings, self.room_name, self.noise, self.tts = settings, room_name, noise, tts
+        self.reply_gap = 1.3   # silence that ends an agent reply; run() raises it for Kokoro
         self.room = rtc.Room()
         self.source = rtc.AudioSource(RATE, 1, queue_size_ms=50)
         self.queue: list[np.ndarray] = []     # pending caller audio, 10 ms frames
@@ -146,11 +150,17 @@ class Caller:
         self._tasks.append(asyncio.create_task(read()))
 
     async def _synth(self, text: str) -> np.ndarray:
-        r = await self._http.post("https://api.cartesia.ai/tts/bytes", headers={
-            "X-API-Key": self.settings.cartesia_api_key.get_secret_value(), "Cartesia-Version": "2025-04-16"},
-            json={"model_id": "sonic-3", "transcript": text, "language": "en",
-                  "voice": {"mode": "id", "id": CALLER_VOICE},
-                  "output_format": {"container": "raw", "encoding": "pcm_s16le", "sample_rate": RATE}})
+        if self.tts == "kokoro":
+            # Kokoro-FastAPI (OpenAI-compatible); raw PCM is 16-bit mono at its native 24 kHz = RATE.
+            r = await self._http.post(f"{self.settings.kokoro_base_url.rstrip('/')}/audio/speech", json={
+                "model": "kokoro", "input": text, "voice": CALLER_VOICE["kokoro"],
+                "response_format": "pcm", "stream": False})
+        else:
+            r = await self._http.post("https://api.cartesia.ai/tts/bytes", headers={
+                "X-API-Key": self.settings.cartesia_api_key.get_secret_value(), "Cartesia-Version": "2025-04-16"},
+                json={"model_id": "sonic-3", "transcript": text, "language": "en",
+                      "voice": {"mode": "id", "id": CALLER_VOICE["cartesia"]},
+                      "output_format": {"container": "raw", "encoding": "pcm_s16le", "sample_rate": RATE}})
         r.raise_for_status()
         return np.frombuffer(r.content, dtype=np.int16)
 
@@ -188,7 +198,9 @@ class Caller:
 
     async def exchange(self, line: str, turns: list[Turn]) -> Turn:
         end = await self.say(line)
-        first = await self.wait_reply_done(end)
+        # A self-hosted TTS on a CPU can pause >1 s between sentences of one reply; don't take that
+        # pause for the end of the reply.
+        first = await self.wait_reply_done(end, quiet=self.reply_gap)
         await asyncio.sleep(0.3)  # transcripts close just after the audio
         turn = Turn(line, self.texts_after(end), (first - end) if first else None)
         turns.append(turn)
@@ -360,10 +372,13 @@ async def fetch_call(sessionmaker, room: str, wait: float = 20.0) -> Call | None
     return None
 
 
-async def run(name: str, scenario: Scenario, settings: Settings, clinic: ClinicConfig, sessionmaker) -> Result:
+async def run(name: str, scenario: Scenario, settings: Settings, clinic: ClinicConfig, sessionmaker,
+              caller_tts: str = "kokoro") -> Result:
     room = f"voicetest-{name}-{uuid.uuid4().hex[:6]}"
     res = Result(name, room)
-    caller = Caller(settings, room)
+    caller = Caller(settings, room, tts=caller_tts)
+    if clinic.voice.tts_provider == "kokoro":
+        caller.reply_gap = 3.0
     try:
         await caller.connect()
         await scenario(caller, res, clinic, settings)
@@ -396,12 +411,13 @@ async def run(name: str, scenario: Scenario, settings: Settings, clinic: ClinicC
     return res
 
 
-def report(results: list[Result], settings: Settings) -> str:
+def report(results: list[Result], settings: Settings, clinic: ClinicConfig, caller_tts: str) -> str:
     lat = [t.latency for r in results for t in r.turns if t.latency is not None]
     agent_lat = [x["total"] for r in results if r.call and r.call.latency for x in r.call.latency if x.get("total")]
     lines = [f"# Voice scenario run {dt.datetime.now():%Y-%m-%d %H:%M}", "",
-             f"LLM `{settings.llm_model}`; agent and test caller both on this machine, LiveKit Cloud "
-             f"({settings.livekit_url}).", "",
+             f"LLM `{settings.llm_model}`; agent TTS `{clinic.voice.tts_provider}` (`{clinic.voice.voice_id}`); "
+             f"caller voice `{caller_tts}` (`{CALLER_VOICE[caller_tts]}`); agent and test caller both on this "
+             f"machine, LiveKit Cloud ({settings.livekit_url}).", "",
              f"**{sum(r.passed for r in results)}/{len(results)} passed.**", ""]
     if lat:
         lines += [f"Caller-perceived reply latency (end of caller speech → first agent audio): "
@@ -429,20 +445,24 @@ async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("only", nargs="*", help=f"scenarios (default: all): {', '.join(SCENARIOS)}")
     ap.add_argument("--write", action="store_true", help="save the report under docs/scenario-runs/")
+    ap.add_argument("--caller-tts", choices=["kokoro", "cartesia"], default="kokoro",
+                    help="voice for the test caller's own lines (default: kokoro, no Cartesia credit used)")
     args = ap.parse_args()
     if unknown := [n for n in args.only if n not in SCENARIOS]:
         ap.error(f"unknown scenario(s): {', '.join(unknown)}")
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
     settings = load_settings()
-    require(settings, ["agent", "backend"])
     clinic = load_clinic_config(settings.clinic_dir)
+    require(settings, ["agent", "backend"], tts_provider=clinic.voice.tts_provider)
+    if args.caller_tts == "cartesia" and not settings.cartesia_api_key:
+        ap.error("--caller-tts cartesia needs CARTESIA_API_KEY in the clinic's .env")
     engine = make_engine(settings.database_url)
     sessionmaker = make_sessionmaker(engine)
     results = []
     for name in args.only or SCENARIOS:
         print(f"-- {name}", flush=True)
-        res = await run(name, SCENARIOS[name], settings, clinic, sessionmaker)
+        res = await run(name, SCENARIOS[name], settings, clinic, sessionmaker, args.caller_tts)
         lat = [f"{t.latency:.2f}" for t in res.turns if t.latency is not None]
         print(f"   {'PASS' if res.passed else 'FAIL'}  latency {', '.join(lat) or '-'}"
               + "".join(f"\n         - {p}" for p in res.problems)
@@ -457,7 +477,7 @@ async def main() -> int:
                                                  f"p90 {np.percentile(lat, 90):.2f}s" if lat else ""))
     if args.write:
         path = REPO_ROOT / "docs" / "scenario-runs" / f"{dt.datetime.now():%Y-%m-%d-%H%M%S}-voice.md"
-        path.write_text(report(results, settings), encoding="utf-8")
+        path.write_text(report(results, settings, clinic, args.caller_tts), encoding="utf-8")
         print(f"report: {path.relative_to(REPO_ROOT)}")
     return 0 if passed == len(results) else 1
 

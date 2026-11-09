@@ -47,7 +47,7 @@ A patient calls the clinic's number. The AI answers, understands speech, replies
 | Agent framework | LiveKit Agents (Python) | Logic, turn-taking, tools |
 | STT | Deepgram (Nova) | Speech to text, WebSocket streaming |
 | LLM | Qwen 2.5 / Qwen 3 (7B–14B) — Ollama locally in dev, Groq for timed tests, vLLM or a paid API in prod | Decides what to say and which tool to call |
-| TTS | Cartesia | Text to voice, WebSocket streaming |
+| TTS | Cartesia (production default); self-hosted Kokoro for local development and testing | Text to voice. Switching is a `clinic.yaml` change (`voice.tts_provider: cartesia \| kokoro`), never a code change |
 | VAD | Silero (built into LiveKit) | Detects start/stop of speech |
 | Backend | FastAPI (Python) | Tool endpoints, booking calls, logging |
 | Database | PostgreSQL | Call logs, messages, settings |
@@ -180,10 +180,12 @@ Each one calls the FastAPI backend over HTTP. None of them touch the booking sys
 | --- | --- | --- |
 | LiveKit Cloud | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Free tier |
 | Deepgram | `DEEPGRAM_API_KEY` | ~$200 free credit |
-| Cartesia | `CARTESIA_API_KEY` + a voice ID | Free tier |
+| Cartesia | `CARTESIA_API_KEY` + a voice ID (needed only when `voice.tts_provider` is `cartesia`) | Free tier |
 | Groq | `LLM_API_KEY` + `LLM_BASE_URL` (`https://api.groq.com/openai/v1`) | Free tier, no card |
 | Twilio | Account SID + auth token (number comes in Phase 2) | Trial credit (~$15) |
 | SendGrid or Twilio SMS | Staff notifications | Free tier |
+
+**TTS during development:** self-hosted **Kokoro** (Kokoro-FastAPI, the `kokoro` service in `docker-compose.yml`, OpenAI-compatible at `http://localhost:8880/v1`) is the local/testing voice, so testing doesn't burn Cartesia credit. Cartesia stays the production default and its adapter stays live. Only the selected provider's settings are required at startup. Locally Kokoro runs on the CPU (the 8 GB GPU is taken by the Qwen model); the GPU image is for the production server.
 
 **Local tooling:** Python 3.11+, Node.js 20+, Docker Desktop, Git, and **Ollama** with `ollama pull qwen2.5:7b` (~5 GB download, needs ~8 GB free RAM).
 

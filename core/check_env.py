@@ -61,12 +61,24 @@ def live_checks(s: Settings, clinic: ClinicConfig) -> list[tuple[str, bool, str]
         if s.deepgram_api_key:
             run("Deepgram", lambda: c.get("https://api.deepgram.com/v1/projects",
                                           headers={"Authorization": f"Token {_secret(s.deepgram_api_key)}"}))
-        if s.cartesia_api_key:
+        if clinic.voice.tts_provider == "cartesia" and s.cartesia_api_key:
             headers = {"X-API-Key": _secret(s.cartesia_api_key), "Cartesia-Version": "2025-04-16"}
             if clinic.voice.voice_id:
                 run("Cartesia voice", lambda: c.get(f"https://api.cartesia.ai/voices/{clinic.voice.voice_id}", headers=headers))
             else:
                 run("Cartesia", lambda: c.get("https://api.cartesia.ai/voices", headers=headers))
+        if clinic.voice.tts_provider == "kokoro" and s.kokoro_base_url:
+            voice = clinic.voice.voice_id or s.kokoro_voice
+
+            def kokoro_voice():
+                r = c.get(f"{s.kokoro_base_url.rstrip('/')}/audio/voices")
+                # Older Kokoro-FastAPI lists names; newer lists {"id": ..., "name": ...} objects.
+                offered = {v.get("id") if isinstance(v, dict) else v for v in (r.json().get("voices") or [])} \
+                    if r.status_code < 300 else set()
+                if r.status_code < 300 and voice not in offered:
+                    r.status_code, r._content = 404, f"voice {voice!r} not offered by this Kokoro server".encode()
+                return r
+            run(f"Kokoro voice {voice}", kokoro_voice)
         if s.llm_api_key and s.llm_url and s.llm_model:
             # A 1-token completion proves the key, the base URL and the model name together.
             run(f"LLM ({s.llm_model})", lambda: c.post(
@@ -101,12 +113,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  [FAIL] {e}")
         return 1
 
-    if "agent" in args.groups and not clinic.voice.voice_id:
-        print("  [FAIL] voice.voice_id is not set in clinic.yaml (agent)")
-        failed = True
+    tts = clinic.voice.tts_provider
+    if "agent" in args.groups:
+        print(f"  [info] TTS provider (clinic.yaml voice.tts_provider): {tts}")
+        if tts == "cartesia" and not clinic.voice.voice_id:
+            print("  [FAIL] voice.voice_id is not set in clinic.yaml (agent, needed for cartesia)")
+            failed = True
 
     for group in args.groups:
-        found = problems(settings, [group])
+        found = problems(settings, [group], tts_provider=tts)
         if found:
             failed = True
             for p in found:

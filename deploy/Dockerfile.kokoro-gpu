@@ -1,0 +1,24 @@
+# syntax=docker/dockerfile:1
+# Kokoro-FastAPI GPU image, with PyTorch rebuilt for CUDA 12.8.
+#
+# The upstream image ships torch 2.8.0+cu126, which has kernels only up to sm_90. NVIDIA
+# Blackwell GPUs (RTX 50xx, sm_120 — e.g. the dev laptop's RTX 5050) fail at startup with
+# "CUDA error: no kernel image is available for execution on the device". The CUDA 12.8 build
+# of the same torch version supports them. Older GPUs work with the upstream image as-is.
+FROM ghcr.io/remsky/kokoro-fastapi-gpu:latest
+
+USER root
+COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /usr/local/bin/uv
+# ~3 GB of CUDA libraries. The uv cache is a BuildKit cache mount, so files that finished
+# downloading survive a failed attempt; the loop retries network blips (timeouts, DNS) without
+# starting over. Long per-file timeout for slow links (uv's default is 30 s).
+RUN --mount=type=cache,target=/root/.cache/uv \
+    export UV_HTTP_TIMEOUT=300 UV_CONCURRENT_DOWNLOADS=2 UV_LINK_MODE=copy; \
+    for attempt in 1 2 3 4 5; do \
+        uv pip install --python /app/.venv/bin/python \
+            --index-url https://download.pytorch.org/whl/cu128 "torch==2.8.0+cu128" && break; \
+        echo "attempt $attempt failed; retrying"; sleep 10; \
+    done; \
+    /app/.venv/bin/python -c "import torch; print('torch', torch.__version__)" \
+    && /app/.venv/bin/python -c "import torch, sys; sys.exit(0 if torch.version.cuda == '12.8' else 1)"
+USER appuser

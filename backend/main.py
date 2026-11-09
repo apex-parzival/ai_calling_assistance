@@ -36,7 +36,7 @@ def create_app(settings: Settings | None = None, clock: Callable[[], datetime] |
         app.state.engine = db.make_engine(settings.database_url)
         app.state.sessionmaker = db.make_sessionmaker(app.state.engine)
         log.info("clinic %s (%s) loaded; environment=%s", clinic.clinic_id, clinic.name, settings.environment)
-        for p in problems(settings, ["agent", "telephony"]):
+        for p in problems(settings, ["agent", "telephony"], tts_provider=clinic.voice.tts_provider):
             log.warning("not set up yet: %s", p)
         if not await db.ping(app.state.engine):
             log.warning("database not reachable yet at startup; /health will report 503 until it is")

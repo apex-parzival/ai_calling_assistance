@@ -56,9 +56,10 @@ TIME_LIMIT_MESSAGE = ("We've been on the line for a while, so I'll have someone 
 def config() -> tuple[Settings, ClinicConfig]:
     """Load and validate once per process. Raises before any call is taken if anything is wrong."""
     settings = load_settings()
-    require(settings, ["agent"])
     clinic = load_clinic_config(settings.clinic_dir)
-    if not clinic.voice.voice_id:
+    require(settings, ["agent"], tts_provider=clinic.voice.tts_provider)
+    if clinic.voice.tts_provider == "cartesia" and not clinic.voice.voice_id:
+        # Kokoro falls back to KOKORO_VOICE; a Cartesia voice is an account-specific ID.
         raise SettingsError(f"voice.voice_id is not set in {settings.clinic_dir / 'clinic.yaml'}")
     return settings, clinic
 
