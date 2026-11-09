@@ -38,6 +38,16 @@ Updated after every step. `[x]` done · `[>]` working on it now · `[ ]` next.
 | [x] | First-reply latency: warm the LLM's prompt cache while the greeting plays (`LLM_WARMUP`, on by default; own client, so a failed warm-up can't set off the LLM-down fallback) | first-reply LLM time 1.6 s → 0.12–0.50 s; 2 tests; 206 pass |
 | [x] | Voice run with the warm-up | 6/7 (booking: 7B model mistake, passed the run before); agent-side median **1.39 s**; caller hears median 2.01 s |
 | [x] | Commit and push the Ollama work and warm-up | pushed to `main` |
+| [x] | Ollama: pulled `qwen3:8b`, built `qwen3-clinic` (`Modelfile.qwen3`); tool calls 3/3 with the right date | |
+| [x] | Found: Ollama ignores `/no_think` (thinking added 2–6 s); `LLM_EXTRA_BODY={"reasoning_effort":"none"}` turns it off | config only |
+| [x] | Found: `localhost` adds ~2 s per request on Windows (IPv6 tried first); `.env` now uses 127.0.0.1 | |
+| [x] | Test caller rebuilt as a chat (as one long prompt the 8B model hung up early or repeated itself) | |
+| [x] | Text scenarios on `qwen3-clinic` | **22/22**; multi-step 8/8 (qwen2.5 with the same caller: 4/8) |
+| [~] | Voice run on `qwen3-clinic` | greeting, FAQ, noise, emergency, advice pass; agent-side median 1.42 s, caller hears 1.85 s. Interrupt failed (agent stopped after 2.2 s). Booking + silence invalid: Cartesia out of credit |
+| [!] | **Blocked: Cartesia returned 402 (out of free credit).** The agent can't speak; the test caller can't either | **you: add Cartesia credit or upgrade the plan (play.cartesia.ai)** |
+| [ ] | Found: when TTS fails, the caller hears nothing (dead air). Needs a fallback that doesn't depend on TTS (transfer / forward on a phone call); Phase 4 item, now proven real | Claude |
+| [ ] | After Cartesia credit: re-run voice interrupt, booking, silence on `qwen3-clinic` | Claude |
+| [x] | Commit and push the qwen3 work | pushed to `main` |
 
 `[x]` done and verified · `[~]` built, but not yet verified the way the exit criterion asks · `[ ]` not started.
 **Who** says who has to do it: *you* (needs your accounts, card, 2FA or admin rights), *Claude*, or *clinic*.

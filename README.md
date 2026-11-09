@@ -80,20 +80,23 @@ so on such a machine **run the voice agent in Docker** (`--profile agent`, below
 Free, offline, no rate limits. Needs [Ollama](https://ollama.com) and about 5 GB of disk.
 
 ```powershell
-ollama pull qwen2.5:7b
-ollama create qwen-clinic -f Modelfile      # 8k context, low temperature (see Modelfile)
+ollama pull qwen3:8b
+ollama create qwen3-clinic -f Modelfile.qwen3   # 8k context, low temperature
 ```
 
 Ollama defaults to a 2,048-token context, which cuts off the system prompt, and its OpenAI API
 can't change it: that's what the `Modelfile` variant is for. Then set the four Ollama lines shown in
-`.env.example` (`LLM_BASE_URL=http://localhost:11434/v1`, `LLM_MODEL=qwen-clinic`, ...).
+`.env.example` (`LLM_BASE_URL=http://127.0.0.1:11434/v1`, `LLM_MODEL=qwen3-clinic`,
+`LLM_EXTRA_BODY={"reasoning_effort":"none"}`). Two traps: on Windows, `localhost` adds ~2 s per
+request (IPv6 is tried first), so use `127.0.0.1`; and Ollama ignores Qwen3's `/no_think`, so
+thinking stays on (2–6 s per reply) unless `reasoning_effort` is `none`.
 The Docker agent reaches it automatically (`LLM_LOCALHOST_ALIAS` in `docker-compose.yml`).
 Optional user environment variables: `OLLAMA_KEEP_ALIVE=2h` (no 10–30 s reload after a break) and
 `OLLAMA_NUM_PARALLEL=1` (parallel slots split the context).
 
-`qwen2.5:7b` is fast here (~0.2 s to first token) but completes multi-step flows (booking,
-cancel, message, transfer) only about 1 time in 3; the code checks stop it saving anything wrong.
-Judge booking behaviour on the hosted model.
+Measured on an RTX 5050 laptop: `qwen3-clinic` passed 22/22 text scenarios and 8/8 multi-step
+runs (booking, cancel, message, transfer), ~0.3 s to first token. `qwen2.5:7b` (`Modelfile`,
+`qwen-clinic`) is a little faster but completed the multi-step runs only 4 times in 8.
 
 ## Run locally (no Docker)
 

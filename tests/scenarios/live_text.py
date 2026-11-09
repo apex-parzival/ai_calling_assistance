@@ -135,21 +135,27 @@ class Harness:
 async def simulated_caller(settings: Settings, greeting: str, goal: str,
                            exchanges: list[tuple[str, list[str]]]) -> str:
     """What a (fake) patient with `goal` says next. May end with END when they'd hang up."""
-    lines = [f"Receptionist: {greeting}"]
-    for said, replies in exchanges:
-        lines += [f"You: {said}"] + [f"Receptionist: {r}" for r in replies if r]
-    prompt = (
-        "You are role-playing a patient phoning a medical clinic, to test its AI receptionist.\n"
+    system = (
+        "You are role-playing a patient phoning a medical clinic, to test its AI receptionist. "
+        "The receptionist's words come to you as the user; you reply as the patient.\n"
         f"Your goal: {goal}\n"
         f"Your details (fake): name {CALLER['name']}, phone {CALLER['phone']}.\n"
         "Rules: reply with ONLY the words you would say, one or two short sentences, casual phone speech. "
+        "Answer the receptionist's last question directly, and never repeat something you already said "
+        "(if it offers to take a message, say yes please). "
         "Give details only when asked. If the receptionist offers times, pick the first one offered. "
         "If it reads your details back correctly, say yes; if anything is wrong, correct it. "
-        f"Once your goal is done (or clearly can't be), say goodbye and add {END}.\n\n"
-        "Conversation so far:\n" + "\n".join(lines) + "\nYou:"
+        "Don't say goodbye while the receptionist is still asking you something. "
+        f"Only when it has said your request is done (or clearly can't be done), say goodbye and add {END}."
+        + ("\n/no_think" if settings.llm_disable_thinking else "")
     )
+    # A chat, not a transcript in one message: small models play a role far better this way.
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": greeting}]
+    for said, replies in exchanges:
+        messages.append({"role": "assistant", "content": said})
+        messages.append({"role": "user", "content": " ".join(r for r in replies if r) or "(silence)"})
     body = {**settings.llm_extra, "model": settings.llm_model, "temperature": 0.4, "max_tokens": 80,
-            "messages": [{"role": "user", "content": prompt + ("\n/no_think" if settings.llm_disable_thinking else "")}]}
+            "messages": messages}
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.post(f"{settings.llm_url.rstrip('/')}/chat/completions", json=body,
                          headers={"Authorization": f"Bearer {settings.llm_api_key.get_secret_value()}"})
