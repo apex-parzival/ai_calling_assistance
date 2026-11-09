@@ -52,6 +52,31 @@ def test_malformed_values_rejected(clean_env, clinics_root, key, value):
     assert any(p.startswith(key) for p in problems(s, ALL_GROUPS))
 
 
+def test_env_example_has_no_inline_comments():
+    # docker compose reads `KEY=   # note` as the value "# note"; python-dotenv strips it.
+    # The two must agree (the agent and the backend share AGENT_API_TOKEN), so no inline comments.
+    import re
+
+    from core.config import CLINICS_ROOT
+    for example in CLINICS_ROOT.glob("*/.env.example"):
+        bad = [line for line in example.read_text(encoding="utf-8").splitlines()
+               if re.match(r"^[A-Z][A-Z0-9_]*=.*\s#", line)]
+        assert bad == [], f"{example}: put comments on their own line: {bad}"
+
+
+def test_llm_extra_body_parsed(clean_env, clinics_root):
+    s = settings_with(clean_env, clinics_root, LLM_EXTRA_BODY='{"provider": {"sort": "latency"}}')
+    assert problems(s, ["agent"]) == []
+    assert s.llm_extra == {"provider": {"sort": "latency"}}
+    assert settings_with(clean_env, clinics_root, LLM_EXTRA_BODY=None).llm_extra == {}
+
+
+@pytest.mark.parametrize("value", ['{"provider": ', '["not", "an", "object"]'])
+def test_llm_extra_body_must_be_a_json_object(clean_env, clinics_root, value):
+    s = settings_with(clean_env, clinics_root, LLM_EXTRA_BODY=value)
+    assert any(p.startswith("LLM_EXTRA_BODY") for p in problems(s, ["agent"]))
+
+
 def test_sendgrid_channel_requires_its_keys(clean_env, clinics_root):
     s = settings_with(clean_env, clinics_root, NOTIFY_CHANNEL="sendgrid")
     found = problems(s, ["notify"])

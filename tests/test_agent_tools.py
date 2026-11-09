@@ -100,7 +100,7 @@ async def test_availability_closed_day_suggests_another(env):
 async def test_booking_refused_without_readback(env):
     env.turns = [("user", "Book me Tuesday at 10:30, Jordan Lee, 403 555 0111")]
     out = await env.do_book_appointment("Jordan Lee", "403-555-0111", "2027-03-02", "10:30", "standard_visit")
-    assert out.startswith("Not done yet")
+    assert out.startswith("NOT SAVED") and "do not tell the caller it was" in out
     assert await rows(env, AppointmentRequest) == []
 
 
@@ -172,6 +172,40 @@ async def test_take_message_after_readback(env):
     assert "Message saved" in out
     [msg] = await rows(env, Message)
     assert msg.caller_phone == "+15875550123"
+
+
+@pytest.mark.anyio
+async def test_take_message_when_number_was_confirmed_before_the_reason(env):
+    # Seen with the real LLM: number confirmed, then the reason asked, then take_message called.
+    confirm(env, "Just to confirm, your phone number is 587-555-0123?", "Yes, that's correct.")
+    env.turns += [("assistant", "And what's the message for the nurse?"),
+                  ("user", "Just asking her to call me back about my lab requisition.")]
+    out = await env.do_take_message("Priya Natarajan", "5875550123", "Call back about lab requisition")
+    assert "Message saved" in out
+    assert len(await rows(env, Message)) == 1
+
+
+@pytest.mark.parametrize("said, outcome, flagged", [
+    # Seen with the real LLM: promised, never called take_message.
+    ("I'll take a message for the clinical team and have them call you back at 403-555-0111.", None, True),
+    ("I'll pass that on to the front desk and have the nurse call you.", "answered", True),
+    ("I'll take a message and have them call you back.", "message", False),       # was recorded
+    ("Your request is in; the front desk will call you to confirm.", "booking_requested", False),
+    ("We're open 8 to 6 on weekdays. Anything else?", "answered", False),
+])
+def test_unkept_follow_up(said, outcome, flagged):
+    from core.tools import unkept_follow_up
+    history = [("user", "Can the nurse call me?"), ("assistant", said), ("user", "Thanks, bye.")]
+    assert unkept_follow_up(history, outcome) is flagged
+
+
+@pytest.mark.anyio
+async def test_take_message_refused_when_confirmed_number_was_different(env):
+    confirm(env, "Your number is 587-555-0123?", "Yes.")
+    env.turns += [("assistant", "And the reason?"), ("user", "Oh wait, use my cell, 587-555-0199. Lab results.")]
+    out = await env.do_take_message("Priya Natarajan", "5875550199", "Lab results")
+    assert out.startswith("NOT SAVED")
+    assert await rows(env, Message) == []
 
 
 @pytest.mark.anyio

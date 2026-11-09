@@ -3,8 +3,9 @@
 AI phone receptionist for a medical clinic in Calgary, Alberta. One shared codebase,
 one `clinics/<name>/` folder per clinic. See [`CLAUDE.md`](CLAUDE.md) for the full build brief.
 
-**Status:** Phase 1 code complete. All of it runs locally, but the voice loop is untested
-until vendor keys exist. See [Phase 1 status](#phase-1-status).
+**Status:** Phase 1 code complete and tested against the real LLM in text mode (22/22 scenarios).
+A real voice call still needs the LiveKit secret. See [Phase 1 status](#phase-1-status) and the
+full [task list](docs/TASKS.md).
 
 ## Layout
 
@@ -61,6 +62,19 @@ pip install -e ".[backend,agent,dev]"
 cd dashboard && npm install && cd ..
 ```
 
+**Windows with Smart App Control:** it can block SQLAlchemy's compiled speed-ups
+(`DLL load failed ... An Application Control policy has blocked this file`). Reinstall it as
+plain Python; it's a little slower, which doesn't matter here:
+
+```powershell
+$env:DISABLE_SQLALCHEMY_CEXT = "1"
+pip install --force-reinstall --no-deps --no-binary sqlalchemy "sqlalchemy==2.1.8"
+```
+
+It also blocks LiveKit's native library (`livekit_ffi.dll`), which has no pure-Python fallback,
+so on such a machine **run the voice agent in Docker** (`--profile agent`, below). It can block
+`.venv\Scripts\*.exe` launchers too: use `python -m alembic` instead of `alembic`.
+
 ## Run locally (no Docker)
 
 Run everything from the repo root.
@@ -91,6 +105,9 @@ The backend container runs migrations on start. Create a staff user with
 python -m core.check_env                  # clinic.yaml + every key (format only)
 python -m core.check_env --live           # also proves each key against the vendor
 pytest                                    # full suite, no keys needed
+python -m tests.scenarios.live_text --write   # the scenarios against the REAL LLM (text mode, costs cents)
+# Real voice calls: a synthetic caller joins LiveKit and talks to the running agent
+docker compose -f deploy/docker-compose.yml --profile agent --profile test run --rm voicetest --write
 python -m tests.scenarios.simulate_call --email ... --password ...   # hang-up -> dashboard timing
 python -m backend.cli latency-report --write                          # median latency per leg
 ```
@@ -124,8 +141,8 @@ All of these are in code and covered by tests; the prompt repeats them, but noth
 
 | Exit criterion | Status |
 | --- | --- |
-| Browser call books an appointment; on dashboard within 1 s of hang-up | Backend → dashboard measured at ~10 ms (`simulate_call`). Real voice call **not yet run (needs keys)**. |
-| Emergency → 911 response every time, 10 attempts | Passes in code: 10/10 through the real agent session with a scripted LLM. **Re-check in the Playground.** |
-| No medical advice in any scripted scenario | Filter + tests in place. **Run the Playground scenarios.** |
-| Median reply latency under 1.5 s, written down | Measured per turn and reported by `latency-report`. **No real calls yet.** |
+| Browser call books an appointment; on dashboard within 1 s of hang-up | Booking works end to end with the real LLM (text mode); backend → dashboard ~10 ms. **One real voice call still needed (LiveKit secret).** |
+| Emergency → 911 response every time, 10 attempts | 10/10 in code tests, and 10/10 with the real LLM across 10 different phrasings. Re-check once by voice. |
+| No medical advice in any scripted scenario | None in 22 real-LLM scenarios, 4 of them advice bait ([reports](docs/scenario-runs/)). Re-check once by voice. |
+| Median reply latency under 1.5 s, written down | LLM alone: 0.61 s median to first token (`qwen/qwen3.5-9b`). **Full voice latency needs a real call.** |
 | Second clinic runs with no code change | Passes (`tests/test_second_clinic.py`). |

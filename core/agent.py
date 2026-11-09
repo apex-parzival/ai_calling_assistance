@@ -22,8 +22,8 @@ from typing import Any
 
 from livekit import rtc
 from livekit.agents import (
-    Agent, AgentServer, AgentSession, ChatContext, ChatMessage, JobContext, JobProcess, ModelSettings, RunContext,
-    StopResponse, ToolResult, cli, function_tool, llm,
+    Agent, AgentServer, AgentSession, APIConnectOptions, ChatContext, ChatMessage, JobContext, JobProcess,
+    ModelSettings, RunContext, SessionConnectOptions, StopResponse, ToolResult, cli, function_tool, llm,
 )
 from livekit.plugins import silero
 
@@ -37,10 +37,12 @@ from core.providers.stt import make_stt
 from core.providers.tts import make_tts
 from core.settings import Settings, SettingsError, load_settings, require
 from core.summary import summarize
-from core.tools import CallState, ReceptionistTools, history_from_items
+from core.tools import CallState, ReceptionistTools, history_from_items, unkept_follow_up
 
 log = logging.getLogger("agent")
 
+LLM_DOWN_GOODBYE = ("I'm sorry, I'm still having a technical problem. The clinic will see that you called. "
+                    "Goodbye.")
 SILENCE_REPROMPT = "Are you still there?"
 SILENCE_GOODBYE = "I haven't heard anything, so I'll end the call now. Please call back any time. Goodbye."
 TURN_LIMIT_MESSAGE = ("I want to make sure you get the right help, so I'll have someone from the clinic follow up "
@@ -76,28 +78,65 @@ class Receptionist(ReceptionistTools, Agent):
         self.job_ctx = job_ctx
         self._ending = False
         self._screened: set[str] = set()
+        self._flagged = False  # staff alerted about an emergency on this call
+        self._pending_end: str | None = None  # turn-limit goodbye waiting for the message to commit
         super().__init__(instructions=build_system_prompt(
             clinic, dt.datetime.now(dt.timezone.utc), disable_thinking=settings.llm_disable_thinking))
 
     # --- conversation hooks -------------------------------------------------
 
     async def on_enter(self) -> None:
+        self.session.on("conversation_item_added", self._count_turn)
+        self.session.on("error", self._on_error)
         # Uninterruptible: the AI disclosure and recording notice must be heard in full.
         self.session.say(self.clinic.greeting, allow_interruptions=False)
 
-    def _screen(self, message: ChatMessage) -> tuple[str, str] | None:
-        """Run the input guardrails once per caller message.
+    def _on_error(self, ev) -> None:
+        """The LLM failed for good (retries used up): never leave the caller in silence."""
+        err = getattr(ev, "error", None)
+        if getattr(err, "type", None) != "llm_error" or getattr(err, "recoverable", True):
+            return
+        self.state.failures["llm"] += 1
+        if self.state.outcome in (None, "answered"):  # don't hide an emergency or a booking
+            self.state.outcome = "system_error"
+        log.error("LLM unavailable (%d): %s", self.state.failures["llm"], getattr(err, "error", err))
+        if self.state.failures["llm"] >= 2:
+            self.end_call(LLM_DOWN_GOODBYE)
+        elif self.state.sip_identity:
+            # A real phone line: hand the caller to a person rather than keep failing.
+            esc = self.clinic.escalation
+            _detached(self.transfer(esc.transfer_number, esc.transfer_announcement))
+        else:
+            self.session.say(
+                "I'm sorry, I'm having a technical problem right now. Please call the clinic directly at "
+                f"{phone_utils.spoken(self.clinic.main_phone)}, or try again in a few minutes.",
+                allow_interruptions=False)
+
+    def _count_turn(self, ev) -> None:
+        if getattr(ev.item, "role", None) == "user":
+            self.state.user_turns += 1
+            if self._pending_end:
+                goodbye, self._pending_end = self._pending_end, None
+                self.end_call(goodbye)
+
+    def _screen(self, message: ChatMessage, *, committed: bool) -> tuple[str, str] | None:
+        """Run the input guardrails on a caller message.
 
         Returns ("say", text) for a fixed reply that replaces the LLM, ("end", goodbye) to
         end the call, ("remind", "") to add the clinical reminder, or None.
-        Called from both input paths — spoken turns (on_user_turn_completed) and typed or
-        programmatic input (which reaches llm_node directly) — so neither can bypass it.
+
+        Reached three ways, and must hold on all of them:
+        - spoken final turn: on_user_turn_completed, before LiveKit commits the message;
+        - typed / programmatic input: llm_node, message already committed to the history;
+        - preemptive generation: llm_node on a not-yet-final transcript, which LiveKit throws
+          away when the final turn arrives. So side effects here are idempotent (flag once),
+          and turns are counted from committed messages (_count_turn), not here.
         """
         if message.id in self._screened:
             return None
-        self._screened.add(message.id)
+        if committed:
+            self._screened.add(message.id)
         text = message.text_content or ""
-        self.state.user_turns += 1
 
         # Guardrail 1: emergencies never reach the LLM.
         if detection := detect_emergency(text, self.clinic.escalation.extra_urgent_phrases):
@@ -105,11 +144,14 @@ class Receptionist(ReceptionistTools, Agent):
             self.state.raise_urgency("emergency")
             self.state.outcome = "emergency"
             self.state.reason = self.state.reason or f"Emergency language: {detection.matched}"
-            _detached(self.backend.post_or_spool(f"/agent/calls/{self.state.call_id}/flag",
-                                                 {"urgency": "emergency", "reason": self.state.reason}))
+            if not self._flagged:
+                self._flagged = True
+                _detached(self.backend.post_or_spool(f"/agent/calls/{self.state.call_id}/flag",
+                                                     {"urgency": "emergency", "reason": self.state.reason}))
             return "say", detection.message
 
-        if self.state.user_turns > self.clinic.limits.max_turns:
+        turns = self.state.user_turns + (0 if committed else 1)  # including this message
+        if turns > self.clinic.limits.max_turns:
             log.info("turn limit reached (%d)", self.clinic.limits.max_turns)
             self.state.outcome = self.state.outcome or "turn_limit"
             return "end", TURN_LIMIT_MESSAGE
@@ -120,27 +162,40 @@ class Receptionist(ReceptionistTools, Agent):
         return None
 
     async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
-        action = self._screen(new_message)
+        action = self._screen(new_message, committed=False)
+        self._screened.add(new_message.id)  # final spoken turn: llm_node mustn't screen it again
         if action is None:
             return
         kind, text = action
-        if kind == "say":
-            self.session.say(text, allow_interruptions=False)
-            raise StopResponse()
-        if kind == "end":
-            self.end_call(text)
+        if kind in ("say", "end"):
+            # StopResponse means LiveKit won't commit the caller's words, so the transcript (and
+            # staff) would never see what triggered the emergency. Keep them, and count the turn.
+            if self.session.history.get_by_id(new_message.id) is None:
+                self.session.history.insert(new_message)
+                self.state.user_turns += 1
+            if kind == "say":
+                self.session.say(text, allow_interruptions=False)
+            else:
+                self.end_call(text)
             raise StopResponse()
         turn_ctx.add_message(role="system", content=CLINICAL_REMINDER)
 
     async def llm_node(self, chat_ctx: ChatContext, tools: list[llm.Tool], model_settings: ModelSettings):
         last = chat_ctx.items[-1] if chat_ctx.items else None
-        if isinstance(last, ChatMessage) and last.role == "user" and (action := self._screen(last)):
+        committed = isinstance(last, ChatMessage) and self.session.history.get_by_id(last.id) is not None
+        if isinstance(last, ChatMessage) and last.role == "user" and (
+                action := self._screen(last, committed=committed)):
             kind, text = action
             if kind == "say":
                 yield text
                 return
             if kind == "end":
-                self.end_call(text)
+                if committed:
+                    self.end_call(text)
+                else:
+                    # Typed input is committed just after this; a preemptive transcript never is
+                    # (its final turn ends the call in on_user_turn_completed). End on commit.
+                    self._pending_end = text
                 return
             chat_ctx = chat_ctx.copy()
             chat_ctx.add_message(role="system", content=CLINICAL_REMINDER)
@@ -262,6 +317,8 @@ server = AgentServer()
 
 def prewarm(proc: JobProcess) -> None:
     proc.userdata["vad"] = silero.VAD.load()
+    # Otherwise imported lazily on the first LLM call, blocking the event loop ~0.4 s mid-call.
+    import openai.types.beta  # noqa: F401
 
 
 server.setup_fnc = prewarm
@@ -351,6 +408,10 @@ async def entrypoint(ctx: JobContext) -> None:
         vad=ctx.proc.userdata["vad"],
         user_away_timeout=clinic.limits.silence_reprompt_seconds,
         max_tool_steps=3,
+        # A caller won't sit through silence: give up on a stalled LLM request after 4 s and
+        # retry at once (default is 10 s, then a 2 s pause). A real call once stalled 19 s.
+        conn_options=SessionConnectOptions(
+            llm_conn_options=APIConnectOptions(max_retry=2, retry_interval=0.1, timeout=4.0)),
     )
     session.on("conversation_item_added", _latency_tracker(state))
     session.on("user_state_changed", _silence_watcher(session, agent, clinic))
@@ -362,10 +423,19 @@ async def entrypoint(ctx: JobContext) -> None:
 
     limit_task = asyncio.create_task(call_time_limit())
 
+    finalized = False
+
     async def finalize(reason: str = "") -> None:
+        nonlocal finalized
+        if finalized:
+            return
+        finalized = True
         limit_task.cancel()
         await started  # keep start -> end ordering, including when spooled
         transcript = _transcript(session)
+        if unkept_follow_up(history_from_items(session.history.items), state.outcome) and not state.unsent_messages:
+            log.warning("agent promised a follow-up but nothing was recorded; flagging call %s", state.call_id)
+            state.outcome = "follow_up_promised"
         for msg in state.unsent_messages:
             if msg.get("unvalidated"):
                 transcript.append({"role": "system", "text": f"[unvalidated message] {msg}"})
@@ -385,6 +455,16 @@ async def entrypoint(ctx: JobContext) -> None:
         await backend.aclose()
 
     ctx.add_shutdown_callback(finalize)
+    # Save the call the moment the session ends (caller hung up, or we ended it). Otherwise the
+    # job waits for LiveKit to close the empty room (~20 s), and the dashboard hears late.
+    session.on("close", lambda ev: ctx.shutdown(reason=f"session closed: {getattr(ev, 'reason', '')}"))
+
+    # Faster still: the caller leaving is the hang-up. Closing the session takes ~2 s more.
+    def on_participant_left(p: rtc.RemoteParticipant) -> None:
+        if p.identity == participant.identity:
+            _detached(finalize("caller hung up"))
+
+    ctx.room.on("participant_disconnected", on_participant_left)
     # record=False: no audio or transcripts uploaded to LiveKit Cloud. Our own backend keeps the
     # transcript; call recordings need explicit consent handling first (Phase 4).
     await session.start(agent=agent, room=ctx.room, record=False)

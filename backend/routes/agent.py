@@ -42,7 +42,9 @@ async def _call_or_none(session: AsyncSession, call_id: uuid.UUID | None) -> Cal
 
 
 # When a call does several things, keep the most significant outcome and the highest urgency.
-OUTCOME_RANK = ["", "answered", "message", "cancel_requested", "booking_requested", "transferred", "emergency"]
+# follow_up_promised: the agent spoke of a callback but no message was recorded (see core.tools.unkept_follow_up).
+# system_error: the LLM failed for good mid-call; the caller was told to call the clinic.
+OUTCOME_RANK = ["", "answered", "follow_up_promised", "system_error", "message", "cancel_requested", "booking_requested", "transferred", "emergency"]
 URGENCY_ORDER = [Urgency.routine, Urgency.urgent, Urgency.emergency]
 
 

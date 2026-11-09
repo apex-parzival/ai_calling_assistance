@@ -72,7 +72,8 @@ def live_checks(s: Settings, clinic: ClinicConfig) -> list[tuple[str, bool, str]
             run(f"LLM ({s.llm_model})", lambda: c.post(
                 f"{s.llm_base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {_secret(s.llm_api_key)}"},
-                json={"model": s.llm_model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]},
+                json={**s.llm_extra, "model": s.llm_model, "max_tokens": 1,
+                      "messages": [{"role": "user", "content": "ping"}]},
             ))
         if s.twilio_account_sid and s.twilio_auth_token:
             run("Twilio", lambda: c.get(f"https://api.twilio.com/2010-04-01/Accounts/{s.twilio_account_sid}.json",

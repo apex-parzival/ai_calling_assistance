@@ -39,6 +39,12 @@ EMERGENCIES = [
     "worst headache of my life",
     "I'm pregnant and bleeding",
     "my wife is unconscious",
+    # Missed in the first live-LLM scenario run (2026-11-09); the LLM said 911 but the call wasn't flagged.
+    "there's so much blood, I can't stop the bleeding",
+    "I took way too many pills",
+    "my mom took a whole bottle of her sleeping pills",
+    "he's bleeding really badly from his hand",
+    "I think I've taken too much of my insulin",
 ]
 
 CRISES = [
@@ -59,6 +65,9 @@ NOT_EMERGENCIES = [
     "do you accept new patients",
     "I need a driver's medical",
     "I'll breathe easier once this is booked",
+    "I need a blood test requisition",
+    "it took too much time to get through last week",
+    "the bleeding from my tooth extraction stopped, do I still need the follow-up?",
 ]
 
 

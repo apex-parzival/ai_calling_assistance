@@ -70,5 +70,29 @@ services:
       backend:
         condition: service_healthy
 
+  # Voice test caller: joins a LiveKit room and talks to the agent (tests/scenarios/voice_call.py).
+  # Runs in Linux because Windows Smart App Control can block LiveKit's native library.
+  #   docker compose -f deploy/docker-compose.yml --profile agent --profile test run --rm voicetest [scenarios] --write
+  voicetest:
+    <<: *clinic
+    profiles: ["test"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.agent
+      args:
+        EXTRAS: agent,backend
+    environment:
+      CLINIC: ${CLINIC:-demo_clinic}
+      DATABASE_URL: postgresql+asyncpg://receptionist:receptionist@postgres:5432/receptionist
+      BACKEND_URL: http://backend:8000
+    volumes:
+      - ../clinics/${CLINIC:-demo_clinic}/clinic.yaml:/app/clinics/${CLINIC:-demo_clinic}/clinic.yaml:ro
+      - ../tests:/app/tests:ro
+      - ../docs/scenario-runs:/app/docs/scenario-runs
+    entrypoint: ["python", "-m", "tests.scenarios.voice_call"]
+    depends_on:
+      backend:
+        condition: service_healthy
+
 volumes:
   pgdata:

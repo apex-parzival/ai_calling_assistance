@@ -8,6 +8,7 @@ malformed key fails before the first call, not during one.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from collections.abc import Callable, Iterable
@@ -58,6 +59,9 @@ class Settings(BaseSettings):
     llm_model: str | None = None
     # Qwen3 "thinking" adds seconds of latency on a call; on by default to turn it off.
     llm_disable_thinking: bool = True
+    # Extra JSON fields sent with every chat completion, for provider-specific routing.
+    # OpenRouter example: {"provider":{"sort":"latency","require_parameters":true},"reasoning":{"enabled":false}}
+    llm_extra_body: str | None = None
 
     # telephony (Phase 2) and SMS
     twilio_account_sid: str | None = None
@@ -76,6 +80,11 @@ class Settings(BaseSettings):
     @property
     def clinic_dir(self) -> Path:
         return self.clinics_root / self.clinic
+
+    @property
+    def llm_extra(self) -> dict:
+        """LLM_EXTRA_BODY parsed. Validated by RULES, so a bad value fails at startup."""
+        return json.loads(self.llm_extra_body) if self.llm_extra_body else {}
 
 
 def load_settings(**overrides) -> Settings:
@@ -106,6 +115,13 @@ def _min_len(n: int) -> Callable[[str], str | None]:
     return lambda v: None if len(v) >= n else f"must be at least {n} characters"
 
 
+def _json_object(v: str) -> str | None:
+    try:
+        return None if isinstance(json.loads(v), dict) else "must be a JSON object, e.g. {\"provider\": {...}}"
+    except ValueError as e:
+        return f"is not valid JSON ({e.msg} at character {e.pos})"
+
+
 def _notify(channel: str) -> Callable[[Settings], bool]:
     return lambda s: s.notify_channel == channel
 
@@ -123,6 +139,7 @@ RULES: tuple[Rule, ...] = (
     Rule("llm_api_key", "agent", _min_len(20)),
     Rule("llm_base_url", "agent", _regex(r"^https?://", "an http(s) URL ending in /v1 or /openai/v1")),
     Rule("llm_model", "agent"),
+    Rule("llm_extra_body", "agent", _json_object, when=lambda s: bool(s.llm_extra_body)),
     Rule("agent_api_token", "agent", _min_len(24)),
     Rule("backend_url", "agent", _regex(r"^https?://", "an http(s) URL")),
     Rule("twilio_account_sid", "telephony", _regex(r"^AC[0-9a-fA-F]{32}$", "'AC' followed by 32 hex characters")),

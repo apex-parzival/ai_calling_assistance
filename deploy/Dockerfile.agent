@@ -12,7 +12,10 @@ RUN useradd --create-home --uid 1000 app
 
 COPY pyproject.toml ./
 COPY core ./core
-RUN pip install ".[agent]"
+# The voice test caller (compose `test` profile) reuses this image with EXTRAS=agent,backend.
+ARG EXTRAS=agent
+COPY backend ./backend
+RUN pip install ".[${EXTRAS}]"
 
 USER app
 # Pre-download model files (Silero VAD) into the image so the first call isn't slow.

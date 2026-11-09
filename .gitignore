@@ -36,3 +36,8 @@ recordings/
 .devdb/
 *.db
 var/
+
+# Raw key dumps - never commit
+sec.txt
+*.secret
+secrets*.txt

@@ -85,6 +85,22 @@ def _digits(text: str) -> str:
     return "".join(ch for ch in text if ch.isdigit())
 
 
+def _is_yes(text: str) -> bool:
+    return bool(_AFFIRM.search(text)) and not _DENY.search(text)
+
+
+def phone_confirmed_earlier(history: list[tuple[str, str]], phone: str) -> bool:
+    """True if, anywhere in the call, the agent said this number and the caller's next turn was a yes.
+
+    Enough for take_message, where only the number has to be right: the caller often confirms it
+    and then explains the reason. A corrected number won't match, so a stale confirmation can't count.
+    """
+    turns = [(r, t) for r, t in history if t and r in ("user", "assistant")]
+    local = phone.removeprefix("+1")
+    return any(r == "assistant" and local in _digits(t) and nr == "user" and _is_yes(nt)
+               for (r, t), (nr, nt) in zip(turns, turns[1:]))
+
+
 def readback_problem(history: list[tuple[str, str]], *, phone: str | None = None, date: dt.date | None = None,
                      time: dt.time | None = None) -> str | None:
     """Return what's missing, or None if the agent read the details back and the caller then said yes.
@@ -94,8 +110,7 @@ def readback_problem(history: list[tuple[str, str]], *, phone: str | None = None
     turns = [(r, t) for r, t in history if t and r in ("user", "assistant")]
     if not turns or turns[-1][0] != "user":
         return "the caller hasn't confirmed yet"
-    confirmation = turns[-1][1]
-    if not _AFFIRM.search(confirmation) or _DENY.search(confirmation):
+    if not _is_yes(turns[-1][1]):
         return "the caller's last answer wasn't a clear yes"
     # The read-back is the last one or two assistant turns before the confirmation.
     said = " ".join(t for r, t in turns[-3:-1] if r == "assistant")
@@ -120,9 +135,31 @@ def readback_problem(history: list[tuple[str, str]], *, phone: str | None = None
     return f"the read-back didn't include {', '.join(missing)}" if missing else None
 
 
+_PROMISE = re.compile(
+    r"\b(?:call you back|get back to you|(?:take|pass along|pass on|leave) (?:a|your|the) message|"
+    r"have (?:them|someone|somebody|a nurse|a doctor|the (?:nurse|doctor|front desk|team|clinic|clinical team|staff)) "
+    r"(?:call|contact|reach))", re.IGNORECASE)
+# Outcomes that mean something was actually recorded or handed to a person.
+_RECORDED = {"message", "booking_requested", "cancel_requested", "transferred", "emergency",
+             "system_error"}  # system_error is already flagged for staff
+
+
+def unkept_follow_up(history: list[tuple[str, str]], outcome: str | None) -> bool:
+    """True if the agent talked about a callback or message but nothing was recorded.
+
+    Small models sometimes say "I'll pass that on" without calling take_message. Checked at
+    hang-up so staff see the call as needing action instead of the caller waiting for a call
+    that never comes. Offers the caller declined will also match; a false alarm costs staff a glance.
+    """
+    if outcome in _RECORDED:
+        return False
+    return any(r == "assistant" and t and _PROMISE.search(t) for r, t in history)
+
+
 def readback_instruction(problem: str) -> str:
-    return (f"Not done yet — {problem}. Read the details back to the caller (name, phone number digit by digit, "
-            f"date and time), ask if it's all correct, and call the tool again only after they say yes.")
+    return (f"NOT SAVED — {problem}. Nothing has been recorded, so do not tell the caller it was. Read the details "
+            f"back to the caller (name, phone number digit by digit, and any date and time), ask if it's all "
+            f"correct, and as soon as they say yes call this tool again.")
 
 
 # --- tools ------------------------------------------------------------------
@@ -229,7 +266,8 @@ class ReceptionistTools:
                 self.state.unsent_messages.append({"name": name, "phone": phone, "reason": reason, "unvalidated": True})
                 return "Message noted. Tell the caller the clinic will follow up."
             return err
-        if problem := readback_problem(self.history(), phone=p.phone):
+        history = self.history()
+        if not phone_confirmed_earlier(history, p.phone) and (problem := readback_problem(history, phone=p.phone)):
             return readback_instruction(problem)
         payload = {**self._base(), **p.model_dump(mode="json"), "urgency": self.state.urgency}
         self.state.caller_name = self.state.caller_name or p.name

@@ -101,6 +101,81 @@ async def test_emergency_gets_911_response_and_skips_llm(make_session, backend_c
 
 
 @pytest.mark.anyio
+async def test_repeated_emergency_answered_each_time_but_flagged_once(make_session, backend_calls):
+    # On a live call the same words are also screened on LiveKit's preemptive (non-final)
+    # transcript; staff must get one alert, and every committed message still gets the 911 text.
+    session, agent, scripted = await make_session([])
+    async with session:
+        first = await session.run(user_input="my dad just collapsed and he's not breathing")
+        await first
+        second = await session.run(user_input="he's still not breathing")
+        await second
+    assert assistant_texts(first) == [EMERGENCY_MESSAGE]
+    assert assistant_texts(second) == [EMERGENCY_MESSAGE]
+    assert scripted.requests == []
+    assert agent.state.user_turns == 2
+    assert len([p for p, _ in backend_calls if p.endswith("/flag")]) == 1
+
+
+@pytest.mark.anyio
+async def test_preemptive_transcript_never_ends_call_or_counts_turn(make_session):
+    from livekit.agents.llm import ChatContext, ChatMessage
+    session, agent, _ = await make_session(["Okay."])
+    agent.state.user_turns = agent.clinic.limits.max_turns
+    ended = []
+    agent.end_call = ended.append
+    async with session:
+        ctx = ChatContext()
+        ctx.add_message(role="user", content="one more question")  # not in session.history
+        out = [c async for c in agent.llm_node(ctx, [], None)]
+    assert out == [] and ended == []  # nothing said, call not ended on a speculative transcript
+    assert agent.state.user_turns == agent.clinic.limits.max_turns
+
+
+class _FailingStream(llm.LLMStream):
+    async def _run(self) -> None:
+        from livekit.agents import APIStatusError
+        raise APIStatusError("Payment Required", status_code=402, retryable=False)
+
+
+class FailingLLM(ScriptedLLM):
+    def chat(self, *, chat_ctx, tools=None, conn_options=DEFAULT_API_CONNECT_OPTIONS, **_kw):
+        self.requests.append(chat_ctx.copy())
+        return _FailingStream(self, chat_ctx=chat_ctx, tools=tools or [], conn_options=conn_options)
+
+
+@pytest.mark.anyio
+async def test_llm_failure_is_never_silence(clean_env, clinics_root, tmp_path):
+    # Seen on a real call: the LLM provider returned 402 and the caller heard nothing.
+    import asyncio
+    for k, v in VALID_ENV.items():
+        clean_env.setenv(k, v)
+    settings = load_settings(clinics_root=clinics_root)
+    clinic = load_clinic_config(settings.clinic_dir)
+    backend = BackendClient(settings, spool_dir=tmp_path / "spool",
+                            transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+    agent = Receptionist(clinic, settings, backend, CallState(), job_ctx=None)
+    goodbyes = []
+    agent.end_call = goodbyes.append
+    session = AgentSession(llm=FailingLLM([]))
+    await session.start(agent)
+    said = []
+    session.on("conversation_item_added",
+               lambda ev: said.append(ev.item.text_content) if ev.item.role == "assistant" else None)
+    async with session:
+        result = await session.run(user_input="what time do you open?")
+        try:
+            await result
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)
+    fallback = [s for s in said if "technical problem" in (s or "")]
+    assert fallback, said
+    assert "5 5 5" in fallback[0]  # the clinic's number, read out digit by digit
+    assert agent.state.outcome == "system_error"
+
+
+@pytest.mark.anyio
 async def test_crisis_gets_988(make_session):
     session, _, scripted = await make_session([])
     async with session:

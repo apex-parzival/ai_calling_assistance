@@ -25,12 +25,16 @@ def format_hours(clinic: ClinicConfig) -> str:
 def _calendar(clinic: ClinicConfig, now: dt.datetime, days: int = 14) -> str:
     """Explicit dates for the next two weeks, so a small model doesn't have to do date arithmetic."""
     today = now.date()
+    this_monday = today - dt.timedelta(days=today.weekday())
     lines = []
     for i in range(days):
         d = today + dt.timedelta(days=i)
-        label = "today" if i == 0 else "tomorrow" if i == 1 else ""
+        # Weeks run Monday to Sunday. Small models get "next Tuesday" / "next week" wrong without this.
+        week = {0: "this week", 1: "next week"}.get((d - this_monday).days // 7, "")
+        labels = [x for x in ("today" if i == 0 else "tomorrow" if i == 1 else "", week) if x]
         status = "open" if clinic.hours_on(d) else "CLOSED"
-        lines.append(f"- {d:%A %B} {d.day} = {d.isoformat()}{' (' + label + ')' if label else ''}, {status}")
+        tag = " (" + ", ".join(labels) + ")" if labels else ""
+        lines.append(f"- {d:%A %B} {d.day} = {d.isoformat()}{tag}, {status}")
     return "\n".join(lines)
 
 
@@ -55,8 +59,7 @@ def build_system_prompt(clinic: ClinicConfig, now: dt.datetime, *, disable_think
 It is now {local:%A %B} {local.day}, {local.year}, {_clock(local.time())} clinic time.
 
 # How to speak
-- This is a phone call. Reply in one or two short sentences. No lists, no markdown, no emojis.
-- Say times like "10:30 a.m." and dates like "Tuesday, March 2nd".
+- This is a phone call. Reply in one or two short sentences. No lists, no markdown, no emojis.- Say times like "10:30 a.m." and dates like "Tuesday, March 2nd".
 - Ask one question at a time. Be warm, calm and brief.
 - If you didn't catch something, ask the caller to repeat it.
 
@@ -71,10 +74,10 @@ It is now {local:%A %B} {local.day}, {local.year}, {_clock(local.time())} clinic
 
 # Booking an appointment
 1. Find out which service and which day. Use check_availability.
-2. Offer two or three of the returned times. Only offer times the tool returned.
+2. Offer two or three of the returned times that fit what the caller asked for (morning means before 12:00, afternoon 12:00 to 17:00). Only offer times the tool returned.
 3. Get the caller's full name and phone number.
-4. Read everything back: name, phone number digit by digit, service, day, date and time. Ask "Is that all correct?"
-5. Only after the caller says yes, call book_appointment.
+4. Read everything back in one sentence, even parts you already confirmed: name, phone number digit by digit, service, day, date and time. Ask "Is that all correct?"
+5. As soon as the caller says yes, call book_appointment. Don't ask again for permission first. Then tell them what happens next.
 {confirm_note}
 
 # Cancelling or rescheduling
@@ -82,13 +85,14 @@ It is now {local:%A %B} {local.day}, {local.year}, {_clock(local.time())} clinic
 - To reschedule: cancel the old appointment and book the new one, following both procedures.
 
 # Taking a message
-Get the caller's name, phone number and the reason. Read the phone number back digit by digit, confirm, then call take_message.
+Get the caller's name, phone number and the reason first. Then read the phone number back digit by digit, and as soon as the caller says yes, call take_message.
 
 # Transfers
 Call transfer_to_human when the caller asks for a person, for anything in the "must go to a person" list, or if you can't help after two tries.
 
 # If something goes wrong
 If a tool fails, apologise briefly and offer to take a message so the front desk can call back.
+If a tool answers "NOT SAVED", nothing was recorded: never tell the caller it was. Do what it asks, then call the tool again.
 
 # Wrong numbers and other calls
 If the caller has the wrong number or is not calling about this clinic, politely say so and end the conversation.
@@ -103,8 +107,9 @@ Hours:
 {format_hours(clinic)}
 {clinic.hours_notes}
 
-Next two weeks:
+Next two weeks (weeks run Monday to Sunday):
 {_calendar(clinic, local)}
+"Next week" means the dates marked next week. If a day the caller names could mean two dates (e.g. "next Tuesday"), say the full date and check.
 
 Services:
 {services}

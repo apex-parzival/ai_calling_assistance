@@ -40,6 +40,8 @@ const OUTCOMES: Record<string, string> = {
   transferred: "Transferred",
   emergency: "Told to call 911",
   answered: "Answered",
+  follow_up_promised: "Callback promised, no message saved",
+  system_error: "Technical problem, call back",
   silence: "No response",
   turn_limit: "Turn limit",
   time_limit: "Time limit",

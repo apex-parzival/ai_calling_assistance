@@ -54,13 +54,16 @@ EMERGENCY_PATTERNS: tuple[re.Pattern, ...] = tuple(re.compile(p, _I) for p in (
     r"\bnumb(?:ness)?\s+(?:on|down)\s+one\s+side",
     r"\bseizure", r"\bconvuls", r"\bworst\s+headache",
     # bleeding / trauma
-    r"\bbleeding\s+(?:heavily|badly|a\s+lot|won'?t\s+stop|that\s+won'?t\s+stop|everywhere|profusely)",
-    r"\b(?:lots|a\s+lot)\s+of\s+blood\b", r"\bwon'?t\s+stop\s+bleeding", r"\bcoughing\s+(?:up\s+)?blood",
+    r"\bbleeding\s+(?:really\s+|very\s+|so\s+)?(?:heavily|badly|a\s+lot|won'?t\s+stop|that\s+won'?t\s+stop|everywhere|profusely)",
+    r"\b(?:lots|a\s+lot|so\s+much|too\s+much)\s+(?:of\s+)?blood\b",
+    r"\b(?:won'?t|can'?t|cannot|couldn'?t)\s+(?:get\s+(?:it|the\s+bleeding)\s+to\s+)?stop\s+(?:the\s+)?bleeding",
+    r"\bcoughing\s+(?:up\s+)?blood",
     r"\bvomiting\s+blood", r"\bhit\s+by\s+a\s+(?:car|truck|vehicle)", r"\bhead\s+injury",
     # allergy / poisoning
     r"\banaphyla", r"\bthroat\s+(?:is\s+)?(?:closing|swelling|swollen)", r"\b(?:tongue|lips?)\s+(?:is\s+|are\s+)?swell",
     r"\b(?:severe|bad|serious)\s+allergic\s+reaction", r"\bepi-?pen\b",
-    r"\boverdos", r"\btook\s+too\s+many\b", r"\bpoison", r"\b(?:swallowed|ate|drank)\s+(?:a\s+|an\s+|some\s+)?(?:bleach|poison|chemicals?|cleaner|(?:button\s+)?batter(?:y|ies)|magnets?)",
+    r"\boverdos", r"\b(?:took|taken|swallowed|had)\s+(?:way\s+|far\s+|a\s+lot\s+|much\s+)?too\s+(?:many|much)\s+(?:of\s+(?:my|his|her|the)\s+)?(?:pills?|tablets?|meds|medications?|medicine|insulin|tylenol|advil|sleeping)",
+    r"\b(?:took|taken|swallowed)\s+(?:a\s+(?:whole|full)\s+)?(?:bottle|handful|pack)\s+of\b", r"\btook\s+too\s+many\b", r"\bpoison", r"\b(?:swallowed|ate|drank)\s+(?:a\s+|an\s+|some\s+)?(?:bleach|poison|chemicals?|cleaner|(?:button\s+)?batter(?:y|ies)|magnets?)",
     # pregnancy
     r"\bwater\s+(?:just\s+)?broke", r"\bin\s+labou?r\b", r"\bbleeding\b.*\bpregnan|\bpregnan.*\bbleeding\b",
     # explicit

@@ -25,6 +25,7 @@ async def summarize(settings: Settings, transcript: list[dict]) -> tuple[str, st
     if not lines:
         return None
     body = {
+        **settings.llm_extra,
         "model": settings.llm_model,
         "temperature": 0,
         "max_tokens": 300,

@@ -9,6 +9,7 @@ from core.settings import Settings
 
 
 def make_llm(settings: Settings):
+    from livekit.agents import NOT_GIVEN
     from livekit.plugins import openai
 
     return openai.LLM(
@@ -17,4 +18,5 @@ def make_llm(settings: Settings):
         api_key=settings.llm_api_key.get_secret_value(),
         temperature=0.3,           # receptionist, not a poet
         parallel_tool_calls=False,  # small models get confused running tools in parallel
+        extra_body=settings.llm_extra or NOT_GIVEN,  # e.g. OpenRouter provider routing (LLM_EXTRA_BODY)
     )

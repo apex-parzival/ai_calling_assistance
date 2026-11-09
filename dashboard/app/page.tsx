@@ -159,7 +159,8 @@ function CallList() {
                   </td>
                   <td className="hide-sm">
                     {outcome(c.outcome)}
-                    {c.appointment_requests.some((a) => a.booking_status === "requested" || a.booking_status === "cancel_requested") &&
+                    {(c.outcome === "follow_up_promised" || c.outcome === "system_error" ||
+                      c.appointment_requests.some((a) => a.booking_status === "requested" || a.booking_status === "cancel_requested")) &&
                       <div><span className="badge urgent">Needs action</span></div>}
                   </td>
                   <td className="hide-sm">{when(c.started_at)}<div className="sub">{duration(c.duration)}</div></td>

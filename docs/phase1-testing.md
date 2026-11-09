@@ -8,6 +8,32 @@ Two layers:
 2. **Playground** (below): the real voice loop. Needs LiveKit, Deepgram, Cartesia and LLM keys.
    Fake caller details only.
 
+## Text mode against the real LLM (no LiveKit, no microphone)
+
+```bash
+python -m tests.scenarios.live_text --write          # all scenarios; or name some: booking cancel
+```
+
+Runs the real agent (prompt, guardrails, tools, read-back check) with the LLM from `.env`, against
+an in-process backend on a throwaway database. A second LLM call plays the caller in multi-turn
+scenarios. Checks are code (exact 911 text, advice filter, rows in the database). Reports with full
+transcripts go to `docs/scenario-runs/`. Run it after every prompt or guardrail change. It can't test
+speech: interrupting, noise, silence and voice latency still need the Playground.
+
+## Real voice calls with a synthetic caller
+
+```bash
+docker compose -f deploy/docker-compose.yml --profile agent up -d            # the agent
+docker compose -f deploy/docker-compose.yml --profile agent --profile test run --rm voicetest --write
+#   or pick scenarios: ... run --rm voicetest emergency booking
+```
+
+A test caller joins a LiveKit room, speaks Cartesia-synthesized lines as a microphone track, and
+listens to the agent. Measures caller-perceived latency (end of caller speech → first agent audio)
+and checks: greeting heard in full even when talked over, 911 text, no advice, agent stops when
+interrupted, booking row in Postgres, silence re-prompt and hang-up, call saved under 1 s after
+hang-up. Runs in Docker because Windows Smart App Control can block LiveKit's native library.
+
 ## Running a Playground session
 
 ```bash
@@ -78,4 +104,6 @@ to the dashboard WebSocket event. Must be under one second.
 
 | Date | Tester | Scenarios passed | Median latency | Notes |
 |---|---|---|---|---|
+| 2026-11-09 | Claude (text mode) | 22/22 | LLM first token 0.61 s | `qwen/qwen3.5-9b` on OpenRouter. Earlier runs found and fixed: 2 missed emergency phrasings, "next week" date error, agent claiming a refused message was saved. Multi-turn message scenario still misses about 1 run in 8 (agent says it'll pass it on without calling the tool); hang-up safety net flags those calls. |
+| 2026-11-09 | Claude (voice, synthetic caller) | greeting (talked over), FAQ, noise, advice, emergency pass | Agent-side ~1.5 s, caller-perceived ~1.9 s (when the LLM was healthy) | Real LiveKit calls via `tests/scenarios/voice_call.py` in Docker. Found and fixed: call saved 22 s after hang-up (now 0.04 s), caller's words missing from emergency transcripts, turns double-counted by preemptive generation, silence when the LLM fails. Interrupt/booking/silence and a clean latency run blocked: OpenRouter account at $0 credit (HTTP 402). |
 | | | | | |

@@ -156,7 +156,7 @@ escalation:
 voice:
   tts_provider: cartesia
   stt_provider: deepgram
-  voice_id: null                       # set to a Cartesia voice ID before running the agent
+  voice_id: 1242fb95-7ddd-44ac-8a05-9e8a22a6137d   # Cartesia "Cindy - Receptionist"
   language: en-CA
 
 booking:
