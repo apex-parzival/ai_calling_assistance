@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AI Clinic Voice Receptionist – Build &amp; Deployment Guide</title>
+<!--
+  Source of "AI Clinic Voice Receptionist – Build & Deployment Guide (v2).pdf".
+  Regenerate (repo root, PowerShell):
+    & "C:\Program Files\Google\Chrome\Application\chrome.exe" --headless=new --no-pdf-header-footer `
+      --print-to-pdf="AI Clinic Voice Receptionist – Build & Deployment Guide (v2).pdf" docs\build-deployment-guide.html
+-->
+<style>
+  @page {
+    size: letter;
+    margin: 0.75in 0.8in 0.8in 0.8in;
+    @top-center { content: "AI Clinic Voice Receptionist – Build & Deployment Guide (v2)"; font: 9pt Georgia, serif; color: #6b6b6b; }
+    @bottom-center { content: "Page " counter(page) " of " counter(pages); font: 9pt "Segoe UI", Arial, sans-serif; color: #6b6b6b; }
+  }
+  :root { --ink: #1f1f1f; --muted: #5b5b5b; --line: #d9d6cf; --head: #f3f1ec; --accent: #b4552d; --ok: #2f6b3a; --warn: #8a5a00; --bad: #9b2c2c; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { font-family: "Segoe UI", Arial, sans-serif; font-size: 10.5pt; line-height: 1.45; color: var(--ink); background: #fff; margin: 0; }
+  h1, h2, h3 { font-family: Georgia, "Times New Roman", serif; font-weight: normal; color: #141413; }
+  h1 { font-size: 23pt; line-height: 1.15; margin: 0 0 6pt; }
+  h2 { font-size: 15.5pt; margin: 20pt 0 6pt; padding-top: 4pt; border-top: 1px solid var(--line); break-after: avoid; }
+  h3 { font-size: 12.5pt; margin: 13pt 0 4pt; break-after: avoid; }
+  p { margin: 4pt 0 6pt; }
+  ul, ol { margin: 3pt 0 7pt; padding-left: 18pt; }
+  li { margin: 1.5pt 0; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 9.2pt; background: #f4f2ee; padding: 0 2pt; border-radius: 2pt; }
+  pre { font-family: Consolas, "Courier New", monospace; font-size: 8.8pt; background: #f4f2ee; padding: 6pt 8pt; border-radius: 3pt; white-space: pre-wrap; margin: 4pt 0 8pt; break-inside: avoid; }
+  table { width: 100%; border-collapse: collapse; margin: 5pt 0 10pt; font-size: 9.3pt; }
+  th, td { border: 1px solid var(--line); padding: 3.5pt 5pt; vertical-align: top; text-align: left; }
+  th { background: var(--head); font-weight: 600; }
+  tr { break-inside: avoid; }
+  .subtitle { color: var(--muted); font-size: 11pt; margin-bottom: 10pt; }
+  .box { border: 1px solid var(--line); border-left: 4px solid var(--accent); background: #faf9f6; padding: 6pt 10pt; margin: 8pt 0 10pt; break-inside: avoid; }
+  .box h3 { margin-top: 2pt; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .warn { color: var(--warn); font-weight: 600; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .small { font-size: 9pt; color: var(--muted); }
+  .flow { font-family: Consolas, monospace; font-size: 9pt; background: #f4f2ee; padding: 6pt 8pt; border-radius: 3pt; }
+  .pb { break-before: page; }
+</style>
+</head>
+<body>
+
+<h1>AI Clinic Voice Receptionist – Build &amp; Deployment Guide</h1>
+<div class="subtitle">Version 2 · 11 November 2026 · Updated from version 1 (7 November 2026) with what was actually built, how it was tested, what was measured, and what changes for production.</div>
+
+<p><b>Client location:</b> Calgary, Alberta, Canada. <b>Development and testing:</b> India. <b>Production deployment:</b> Canada (AWS <code>ca-west-1</code>, Calgary).</p>
+<p><b>Model:</b> one dedicated agent per clinic (single-tenant). Shared core codebase, separate config and deployment per clinic.</p>
+<p class="small">All prices are approximate and in USD. Vendor prices and free tiers change often, so check each vendor's pricing page before you quote a client.</p>
+
+<div class="box">
+<h3>What changed since version 1</h3>
+<ul>
+  <li><b>Phase 0 and Phase 1 are built and tested.</b> The whole system (agent, backend, database, staff dashboard) runs on one laptop and has handled real browser calls through LiveKit, including a call by the developer in the LiveKit Playground on 11 Nov 2026.</li>
+  <li><b>Development runs on local, free components:</b> Qwen3 8B on <b>Ollama</b> for the LLM and self-hosted <b>Kokoro</b> for the voice. No patient data and no test audio leave the laptop for those two legs. Cartesia stays the production voice; switching is one line in <code>clinic.yaml</code>.</li>
+  <li><b>Timed tests use Groq</b> (Qwen 3.8 27B). The best measured run: <b>1.21 s</b> median from the end of the caller's sentence to the first sound of the reply, under the 1.5 s target.</li>
+  <li><b>Safety rules are enforced in code</b>, not only in the prompt: emergency (911) and crisis (988) detection before the LLM, a medical-advice filter on every reply, and a read-back check before any booking.</li>
+  <li><b>Correction:</b> v1 gave the latency target as "about 1 second" in one place. The target used throughout is <b>under 1.5 s</b> median per reply.</li>
+  <li>New sections: how it was tested (§6), latency results and tuning (§7), and <b>what changes for production</b> (§8).</li>
+</ul>
+</div>
+
+<h2>1. What the system does</h2>
+<p>A patient calls the clinic's Calgary phone number. The AI answers, understands what they say, replies in a natural voice and can:</p>
+<ul>
+  <li>Answer FAQs (hours, location, services, parking, insurance), using only what is in the clinic's config file</li>
+  <li>Take booking, rescheduling and cancellation requests (staff confirm them in the dashboard until the clinic's booking system is connected)</li>
+  <li>Take messages for the front desk</li>
+  <li>Transfer urgent or clinical calls to a human, or tell callers to hang up and dial 911 in an emergency (988 for a mental-health crisis)</li>
+</ul>
+<p>Every call is saved with its transcript, a short summary and any request, and appears on the staff dashboard within about a second of hang-up.</p>
+
+<h2>2. Technology stack: development vs production</h2>
+<table>
+  <tr><th style="width:15%">Layer</th><th style="width:29%">Development and testing (built, in use)</th><th style="width:29%">Production</th><th>Notes</th></tr>
+  <tr><td>Phone number / carrier</td><td>None yet; browser calls via the LiveKit Playground</td><td>Twilio Calgary number (403/587/825)</td><td>Phase 2. Telnyx is an alternative.</td></tr>
+  <tr><td>Call bridge</td><td>—</td><td>Twilio Elastic SIP trunk → LiveKit inbound trunk + dispatch rule</td><td>Phase 2</td></tr>
+  <tr><td>Real-time media</td><td>LiveKit Cloud (free tier)</td><td>LiveKit Cloud with a confirmed data region, or self-hosted LiveKit in Canada</td><td>Recording off (<code>record=False</code>)</td></tr>
+  <tr><td>Agent framework</td><td colspan="2">LiveKit Agents (Python), version 1.8; runs in a Docker container</td><td>Docker because Windows Smart App Control blocks LiveKit's native library on the dev laptop</td></tr>
+  <tr><td>Speech-to-text</td><td colspan="2">Deepgram Nova-3, streaming</td><td>Production needs a DPA and zero retention (§9)</td></tr>
+  <tr><td>LLM</td><td><b>Ollama, <code>qwen3-clinic</code></b> (Qwen3 8B) for everyday work; <b>Groq</b> <code>qwen/qwen3.8-27b</code> for timed tests</td><td>Paid hosted API with a DPA, or Qwen 7B–14B on vLLM in <code>ca-west-1</code></td><td>Any OpenAI-compatible endpoint; switching is a <code>.env</code> change</td></tr>
+  <tr><td>Text-to-speech</td><td><b>Kokoro</b> (self-hosted Kokoro-FastAPI, GPU or CPU container)</td><td><b>Cartesia</b> (default), or Kokoro on a Canadian GPU server for a fully Canadian stack</td><td>Switching is <code>voice.tts_provider</code> in <code>clinic.yaml</code></td></tr>
+  <tr><td>Voice activity detection</td><td colspan="2">Silero VAD (built into LiveKit)</td><td>End-of-turn silence is a per-clinic setting (§7)</td></tr>
+  <tr><td>Backend / tools</td><td colspan="2">FastAPI (Python)</td><td>The agent never touches the database or booking system directly</td></tr>
+  <tr><td>Database</td><td>PostgreSQL 16 in Docker (SQLite also works without Docker)</td><td>AWS RDS PostgreSQL in <code>ca-west-1</code>, encrypted at rest</td><td>Alembic migrations</td></tr>
+  <tr><td>Staff dashboard</td><td>Next.js on <code>localhost:3000</code></td><td>Same app behind HTTPS on the Canadian server</td><td></td></tr>
+  <tr><td>Booking</td><td>Manual adapter: request recorded, staff confirm in the dashboard</td><td>The clinic's system (Jane App, Google Calendar, Accuro, Oscar, Cliniko) once named</td><td>Phase 3; manual keeps working meanwhile</td></tr>
+  <tr><td>Staff notifications</td><td>Printed to the backend log</td><td>SendGrid / SMTP email or Twilio SMS, with no patient details in the text</td><td><code>NOTIFY_CHANNEL</code></td></tr>
+  <tr><td>Secrets</td><td>Per-clinic <code>.env</code>, git-ignored</td><td>AWS Secrets Manager</td><td>Never in the repo or image</td></tr>
+  <tr><td>Hosting</td><td>One laptop (RTX 5050 8 GB, Docker Desktop)</td><td>AWS <code>ca-west-1</code> (Calgary)</td><td>Phase 5</td></tr>
+</table>
+<p>Keep the LLM at 7B–14B parameters for speed. One exception for testing: Groq currently serves no Qwen model in that range, so timed tests used its 27B Qwen, which was still fast (0.29 s to first token).</p>
+
+<h2>3. Architecture: how each part talks to the next</h2>
+<p><b>Call flow, step by step (unchanged from v1, with the latency target corrected):</b></p>
+<ol>
+  <li><b>Patient → Twilio:</b> the patient dials the clinic's Calgary number (PSTN).</li>
+  <li><b>Twilio → LiveKit:</b> Twilio forwards the call over SIP. LiveKit creates a room and adds the caller.</li>
+  <li><b>LiveKit → agent:</b> LiveKit dispatches the Python agent into the room. Audio streams both ways over WebRTC.</li>
+  <li><b>Agent → Deepgram:</b> caller audio goes over a WebSocket; live text comes back.</li>
+  <li><b>Agent → guardrails → LLM:</b> every caller message is screened for emergency and crisis language first. A match plays a fixed 911 or 988 message and never reaches the LLM. Otherwise the text, the conversation history and the clinic's system prompt go to the LLM (OpenAI-compatible API, streaming).</li>
+  <li><b>LLM → tools:</b> to check a slot, book, cancel, take a message or transfer, the LLM emits a tool call. The agent validates it and calls the FastAPI backend, which talks to the booking system and database.</li>
+  <li><b>LLM → advice filter → TTS:</b> each sentence of the reply is checked for medical advice before it is spoken, then streamed to the TTS.</li>
+  <li><b>Agent → LiveKit → Twilio → patient:</b> audio plays to the caller. Target: <b>under 1.5 s median</b> from the end of the caller's sentence to the first sound of the reply.</li>
+  <li><b>After the call:</b> transcript, summary and any request are saved to PostgreSQL and pushed to the dashboard; urgent calls trigger a staff alert.</li>
+</ol>
+<div class="flow">Patient phone → Twilio (PSTN) → SIP trunk → LiveKit room → Python agent → [Deepgram STT → guardrails → LLM (Qwen) → advice filter → TTS] → LiveKit → Twilio → patient<br>
+Side channel: LLM tool call → FastAPI backend → booking system / email / SMS / PostgreSQL → dashboard (WebSocket)</div>
+<p><b>Two paths, kept separate:</b> the voice loop never waits on the database. Call records are written in the background; tool calls are the only backend requests made while the caller waits, and they have short timeouts. If the backend is down, messages are kept on disk and replayed later.</p>
+<table>
+  <tr><th>From</th><th>To</th><th>Protocol</th></tr>
+  <tr><td>Phone network</td><td>Twilio</td><td>PSTN</td></tr>
+  <tr><td>Twilio</td><td>LiveKit</td><td>SIP (Elastic SIP Trunk)</td></tr>
+  <tr><td>LiveKit</td><td>Agent</td><td>WebRTC / LiveKit SDK</td></tr>
+  <tr><td>Agent</td><td>Deepgram</td><td>WebSocket streaming</td></tr>
+  <tr><td>Agent</td><td>LLM</td><td>HTTPS, OpenAI-compatible chat completions (streaming)</td></tr>
+  <tr><td>Agent</td><td>TTS</td><td>Cartesia: WebSocket streaming. Kokoro: HTTPS, OpenAI-compatible speech API (raw 24 kHz audio)</td></tr>
+  <tr><td>Agent</td><td>Backend</td><td>HTTPS REST (JSON), shared-secret token</td></tr>
+  <tr><td>Backend</td><td>Booking system</td><td>REST API or webhook</td></tr>
+  <tr><td>Backend</td><td>Dashboard</td><td>HTTPS REST + WebSocket push; session cookies</td></tr>
+  <tr><td>Backend</td><td>Clinic staff</td><td>Email (SMTP/SendGrid) or SMS (Twilio)</td></tr>
+</table>
+
+<h2>4. Single-tenant setup (one agent per clinic)</h2>
+<ul>
+  <li>One core Git repository. Each clinic is a folder: <code>clinics/&lt;clinic&gt;/clinic.yaml</code> (name, hours, services, FAQs, transfer number, voice, greeting, limits; committed) and <code>clinics/&lt;clinic&gt;/.env</code> (keys; never committed).</li>
+  <li>Nothing clinic-specific is written in the code. Adding a clinic means copying the folder and setting <code>CLINIC=&lt;folder&gt;</code>; a test proves a second clinic runs with no code change.</li>
+  <li><code>clinic.yaml</code> is checked when the agent starts, not mid-call: it won't load unless the greeting mentions AI and recording.</li>
+  <li>Each clinic gets its own deployment: separate container set, Twilio number, LiveKit dispatch rule and database. Bug fixes go into the core repo once, then each clinic is redeployed.</li>
+</ul>
+<pre>core/        agent.py, tools.py, prompts.py, guardrails.py, config.py, settings.py, providers/ (stt, llm, tts)
+backend/     FastAPI app, booking adapters, auth, audit log, WebSocket, Alembic migrations
+dashboard/   Next.js staff dashboard
+clinics/     demo_clinic/clinic.yaml (+ .env, not committed)
+deploy/      Dockerfiles, docker-compose.yml, docker-compose.kokoro-gpu.yml
+tests/       pytest suite + scenarios/ (text and voice test callers)</pre>
+
+<h2 class="pb">5. Build procedure: how it was actually done</h2>
+<table>
+  <tr><th style="width:24%">Phase</th><th>What it covers</th><th style="width:22%">Status (11 Nov 2026)</th></tr>
+  <tr><td>0 – Accounts and prerequisites</td><td>Vendor keys, local tooling, Docker stack, key check at startup</td><td class="ok">Done (Twilio keys wait for Phase 2)</td></tr>
+  <tr><td>1 – Full local vertical slice</td><td>Config, database, backend, booking adapter, agent, tools, guardrails, dashboard, testing</td><td class="ok">Done: all 5 exit criteria met (§6)</td></tr>
+  <tr><td>2 – Telephony</td><td>Twilio number, SIP trunk, real phone calls</td><td>Next</td></tr>
+  <tr><td>3 – Booking integration</td><td>The clinic's booking system</td><td class="warn">Waiting on the clinic to name it</td></tr>
+  <tr><td>4 – Hardening, privacy, compliance</td><td>Fallbacks, encryption, retention, DPAs, PIA</td><td>Partly done</td></tr>
+  <tr><td>5 – Canadian deployment, soft launch</td><td>AWS <code>ca-west-1</code>, staged rollout</td><td>Not started</td></tr>
+</table>
+
+<h3>Step 1 – Accounts</h3>
+<p>LiveKit Cloud (free tier), Deepgram (free credit), Cartesia (free tier; its free credit ran out during testing), Groq (free tier, no card), OpenRouter (optional; its free tier is capped at 50 requests a day until $10 of credit is bought). Twilio is only needed from Phase 2. Every key is checked at startup and with <code>python -m core.check_env --live</code>, which calls each vendor to prove the key works.</p>
+
+<h3>Step 2 – Local stack</h3>
+<ul>
+  <li>Python 3.11+, Node.js 20+, Docker Desktop, Git, Ollama.</li>
+  <li><code>docker compose -f deploy/docker-compose.yml --profile agent up -d --build</code> starts Postgres, backend, dashboard, the voice agent and Kokoro. The GPU override file runs Kokoro on the NVIDIA GPU.</li>
+  <li>The agent runs in Docker, not natively, because Windows Smart App Control blocks LiveKit's native library. Do not switch Smart App Control off for this.</li>
+  <li>Tested in the browser with the LiveKit Agents Playground: no phone number needed, free.</li>
+</ul>
+
+<h3>Step 3 – The LLM (Qwen)</h3>
+<ul>
+  <li><b>Local:</b> <code>ollama pull qwen3:8b</code>, then <code>ollama create qwen3-clinic -f Modelfile.qwen3</code>. The Modelfile sets an 8k context (Ollama's default 2k cuts off the system prompt) and a low temperature.</li>
+  <li><b>Lessons from testing:</b>
+    <ul>
+      <li>Ollama ignores Qwen3's <code>/no_think</code>. Send <code>{"reasoning_effort": "none"}</code> or every reply "thinks" for 2–6 s.</li>
+      <li>On Windows use <code>127.0.0.1</code>, not <code>localhost</code>: localhost tries IPv6 first and added about 2 s per request.</li>
+      <li>Qwen3 8B passed 22/22 text scenarios and 8/8 multi-step runs; Qwen 2.5 7B finished multi-step flows only 4 times in 8. Qwen3 8B is the local default.</li>
+      <li>The agent has the LLM read the system prompt while the greeting plays (a "warm-up"), cutting the first reply's LLM time from 1.6 s to 0.12–0.5 s on Ollama. Turned off on Groq, where it only uses up the rate limit.</li>
+      <li>A stalled LLM request is abandoned after 4 s and retried at once. If the LLM fails for good, the caller hears an apology and the clinic's number, never silence.</li>
+    </ul>
+  </li>
+  <li><b>Groq:</b> same settings with Groq's URL, key and <code>qwen/qwen3.8-27b</code>. Fast, but the free tier allows only about 7,000 input tokens per minute (see §11).</li>
+</ul>
+
+<h3>Step 4 – Tools and guardrails</h3>
+<p>Five tools, each calling the FastAPI backend: <code>check_availability</code>, <code>book_appointment</code>, <code>cancel_appointment</code>, <code>take_message</code>, <code>transfer_to_human</code>. Built-in protections:</p>
+<ul>
+  <li>Every tool payload is validated; on the first error the LLM gets a correction, on the second it is told to take a message instead.</li>
+  <li><b>Read-back in code:</b> booking, cancelling and messages are refused until the agent has read the phone number (and date and time) back and the caller has said yes. Small models get digits wrong; this stops a wrong number being saved.</li>
+  <li>While a tool runs, the agent says a short line ("Let me check that for you") if it hasn't already said something, so the caller doesn't sit in silence.</li>
+  <li>If the agent promises a callback but nothing was saved, the call is flagged "Needs action" on the dashboard.</li>
+  <li>Limits from <code>clinic.yaml</code>: re-prompt after silence, then hang up; maximum turns; maximum call length.</li>
+</ul>
+
+<h3>Step 5 – Booking</h3>
+<p>The manual adapter ships first: availability comes from the clinic's hours, the request is recorded and staff confirm it from the dashboard. The clinic's own system (Jane App, Google Calendar, Accuro, Oscar or Cliniko) plugs in behind the same interface once they name it. If it's Jane App, apply for API access early: it is limited.</p>
+
+<h3>Step 6 – Voice (TTS)</h3>
+<p>Development uses self-hosted <b>Kokoro</b> (Kokoro-FastAPI, voice <code>af_heart</code>), so testing costs nothing and no text leaves the machine. On the RTX 5050 (a Blackwell GPU) the upstream GPU image fails ("no kernel image is available"); <code>deploy/Dockerfile.kokoro-gpu</code> swaps in a CUDA 12.8 PyTorch build. Production uses <b>Cartesia</b> by changing <code>tts_provider: cartesia</code> and the voice ID in <code>clinic.yaml</code>; the Cartesia code path is kept live and unchanged.</p>
+
+<h3>Step 7 – Real phone number (Phase 2, next)</h3>
+<ol>
+  <li>Buy a Calgary number in Twilio (403, 587 or 825).</li>
+  <li>Create an Elastic SIP trunk; set its origination URI to the LiveKit SIP URI; attach the number.</li>
+  <li>In LiveKit, create an inbound SIP trunk and a dispatch rule that puts callers in a room with the agent.</li>
+  <li>The agent already reads the caller's number from the SIP <code>From</code> header; verify it on real calls.</li>
+  <li>Test from India with a SIP softphone (Zoiper) or Twilio Voice in the browser to avoid international charges.</li>
+</ol>
+
+<h3>Step 8 – Deploy to Canada (Phase 5)</h3>
+<p>See §8 for the full list of production changes.</p>
+
+<h2>6. Testing: how it was tested and the results</h2>
+<p>All testing uses <b>fake patient data only</b>: fictional names and 403-555-01xx numbers.</p>
+<table>
+  <tr><th style="width:22%">Layer</th><th>What it does</th><th style="width:24%">Result</th></tr>
+  <tr><td>Automated tests (<code>pytest</code>)</td><td>Guardrails, tools, backend, audit log, migrations, the second-clinic check, and the real agent inside a LiveKit session driven by a scripted LLM. No keys needed.</td><td class="ok">221 pass</td></tr>
+  <tr><td>Text scenarios against the real LLM</td><td>22 scripted conversations (FAQ, booking, cancel, message, transfer, emergency, advice bait, wrong number…), a second LLM playing the caller, checks done in code</td><td class="ok">22/22 (Qwen3 8B)</td></tr>
+  <tr><td>Voice calls with a synthetic caller</td><td>A test caller joins a LiveKit room and speaks; 7 scenarios: greeting talked over, FAQ, background noise, interrupting, emergency, advice bait, booking, silence. Measures latency the way a caller hears it.</td><td class="ok">7/7 on local models; 5/7 on Groq (2 failed on Groq's rate limit)</td></tr>
+  <tr><td>Human call in the LiveKit Playground</td><td>The developer called with a real microphone and ran the scenario list</td><td class="ok">Working (11 Nov 2026)</td></tr>
+</table>
+
+<h3>Phase 1 exit criteria</h3>
+<table>
+  <tr><th style="width:42%">Criterion</th><th>Evidence</th></tr>
+  <tr><td>A browser call books an appointment; it appears in Postgres and on the dashboard within a second of hang-up</td><td class="ok">Met: booking calls over LiveKit; request on the dashboard 0.05 s after hang-up</td></tr>
+  <tr><td>Emergency phrasing produces the 911 response every time, across 10 attempts</td><td class="ok">Met: 10/10 in code tests, 10/10 with the real LLM, and by voice (911 message in 0.60 s)</td></tr>
+  <tr><td>No medical advice in any scripted scenario</td><td class="ok">Met: none in 22 text scenarios (4 of them advice bait) or in voice runs</td></tr>
+  <tr><td>Median reply latency under 1.5 s, measured and written down</td><td class="ok">Met on the Groq + GPU Kokoro run: 1.21 s as the caller hears it, 1.08 s measured by the agent.</td></tr>
+  <tr><td>A second clinic folder runs with no code change</td><td class="ok">Met: automated test</td></tr>
+</table>
+<p class="small">Caveat on latency: the Groq free tier rate-limited longer calls, so the 1.21 s median comes from shorter calls. Re-measure on the production LLM and on real phone calls (Phase 2).</p>
+
+<h2>7. Latency: what was measured and what was tuned</h2>
+<table>
+  <tr><th style="width:38%">Setup (all on the dev laptop, LiveKit Cloud)</th><th>Caller hears (median)</th><th>Agent measures (median)</th><th>Main limit</th></tr>
+  <tr><td>OpenRouter Qwen 9B + Cartesia (9 Nov)</td><td>~1.9 s</td><td>~1.5 s</td><td>End-of-speech wait, LLM host</td></tr>
+  <tr><td>Ollama Qwen 2.5 7B + Cartesia, warm-up on</td><td>2.01 s</td><td>1.39 s</td><td>Tool-call turns</td></tr>
+  <tr><td>Ollama Qwen3 8B + Cartesia</td><td>1.85 s</td><td>1.42 s</td><td>(Cartesia credit ran out)</td></tr>
+  <tr><td>Ollama Qwen3 8B + Kokoro on CPU</td><td>—</td><td>2.71 s</td><td>Kokoro on CPU: 0.7–4.2 s to first audio</td></tr>
+  <tr><td>Ollama Qwen3 8B + Kokoro on GPU (shared)</td><td>2.05 s</td><td>2.03 s</td><td>LLM and TTS sharing one 8 GB GPU</td></tr>
+  <tr><td><b>Groq Qwen 3.8 27B + Kokoro on GPU (11 Nov)</b></td><td><b>1.21 s</b> (p90 2.18 s)</td><td><b>1.08 s</b></td><td>Groq free-tier rate limit</td></tr>
+</table>
+<p><b>Where the time goes on the best run</b> (per reply): end-of-speech wait 0.42–0.48 s, speech-to-text 0.24–0.47 s, LLM first token 0.38–0.45 s, Kokoro first audio 0.10–0.19 s (Cartesia measured 0.13–0.17 s).</p>
+<p><b>What was tuned:</b></p>
+<ul>
+  <li><b>End-of-turn silence</b> (<code>voice.end_of_turn_silence</code> in <code>clinic.yaml</code>): how long the caller must be silent before the agent answers. Silero's built-in 0.55 s was the real floor, so lowering LiveKit's delay alone did nothing; both are now set from this one value. The demo clinic uses 0.4 s. Lower is faster but can cut in when a caller pauses while reading out a number; re-tune on real phone calls.</li>
+  <li>Prompt warm-up during the greeting (first reply 1.6 s → 0.12–0.5 s on Ollama).</li>
+  <li>Qwen3 "thinking" off; <code>127.0.0.1</code> instead of <code>localhost</code> on Windows.</li>
+  <li>A spoken hold-on line during tool calls (booking turns took 4–6 s on local models).</li>
+  <li>LLM request timeout 4 s with an immediate retry (a real call once stalled 19 s).</li>
+</ul>
+
+<h2 class="pb">8. What changes for production</h2>
+<p>Everything built so far runs unchanged in production. These are the settings, services and paperwork that change, and the phase that delivers each.</p>
+<table>
+  <tr><th style="width:15%">Area</th><th style="width:26%">Now (development)</th><th style="width:33%">Production</th><th>Phase</th></tr>
+  <tr><td>Phone</td><td>Browser calls only (Playground)</td><td>Twilio Calgary number → Elastic SIP trunk → LiveKit inbound trunk + dispatch rule. The clinic's own number connects by forwarding, porting or direct SIP (§13).</td><td>2</td></tr>
+  <tr><td>Human transfer</td><td>Simulated (no phone line on a browser call)</td><td>Real SIP transfer to the clinic's urgent line, tested end to end</td><td>2</td></tr>
+  <tr><td>LLM</td><td>Ollama (local) and Groq free tier</td><td>A <b>paid</b> hosted API with a DPA and zero data retention, or Qwen 7B–14B on vLLM in <code>ca-west-1</code>. Free tiers can't serve real calls: Groq's free tier cut calls off after about two turns.</td><td>4–5</td></tr>
+  <tr><td>Model choice</td><td>Qwen3 8B (local), Qwen 3.8 27B (Groq)</td><td>Decide by measurement on the production provider: 7B–14B as briefed, unless a larger model is as fast there</td><td>4</td></tr>
+  <tr><td>Voice (TTS)</td><td>Kokoro, self-hosted on the laptop</td><td>Cartesia (<code>tts_provider: cartesia</code>) with a DPA and zero retention, or Kokoro on a Canadian GPU server if the clinic wants no US voice vendor</td><td>4</td></tr>
+  <tr><td>Speech-to-text</td><td>Deepgram (free credit)</td><td>Deepgram paid plan with DPA and zero retention, or faster-whisper in Canada</td><td>4</td></tr>
+  <tr><td>Never dead air</td><td>LLM failure → spoken apology + clinic number</td><td>Any failure (LLM, <b>TTS</b>, agent down) → the call forwards to the clinic line or voicemail. A TTS failure is still dead air today: must fix.</td><td>4</td></tr>
+  <tr><td>Hosting</td><td>Docker Compose on one laptop</td><td>AWS <code>ca-west-1</code>: ECS or small EC2 for agent + backend; dashboard behind HTTPS (ALB/CloudFront); one task set per clinic</td><td>5</td></tr>
+  <tr><td>Database</td><td>Postgres in a container, unencrypted</td><td>RDS PostgreSQL, encrypted at rest, nightly encrypted backups (restore tested once); transcripts auto-deleted after an agreed window</td><td>4–5</td></tr>
+  <tr><td>LiveKit</td><td>LiveKit Cloud, default region</td><td>Confirmed Canadian/acceptable data region, or self-hosted LiveKit in <code>ca-west-1</code>; recording stays off</td><td>5</td></tr>
+  <tr><td>Secrets</td><td><code>.env</code> file per clinic</td><td>AWS Secrets Manager; nothing on disk or in images</td><td>5</td></tr>
+  <tr><td>Staff alerts</td><td>Printed to the log</td><td>Email (SendGrid/SMTP) or SMS (Twilio), with no patient details in the text</td><td>4</td></tr>
+  <tr><td>Booking</td><td>Manual (staff confirm)</td><td>The clinic's booking system, or stays manual</td><td>3</td></tr>
+  <tr><td>Security</td><td>Login with session cookies; audit log</td><td>Plus backend rate limiting, HTTPS everywhere, optional two-factor sign-in, session timeout reviewed</td><td>4</td></tr>
+  <tr><td>Monitoring</td><td>Container logs</td><td>CloudWatch dashboards and alerts: call failures, latency over 2 s, provider errors, agent worker down, with a named person on the other end</td><td>5</td></tr>
+  <tr><td>Settings</td><td><code>ENVIRONMENT=development</code></td><td><code>ENVIRONMENT=production</code>; real clinic content in <code>clinic.yaml</code> in the clinic's own words</td><td>5</td></tr>
+  <tr><td>Rollout</td><td>—</td><td>After-hours only → overflow (after 4 rings) → all calls, a week each with transcript review; rollback plan to turn the AI off in under five minutes</td><td>5</td></tr>
+</table>
+<h3>Must be re-done or re-measured in production</h3>
+<ul>
+  <li><b>Latency</b> on real phone calls with the production LLM and Cartesia: the phone network adds delay that browser tests don't show. Target still under 1.5 s median.</li>
+  <li><b>End-of-turn silence</b> on real phone audio and real callers, especially older callers and anyone reading out a number.</li>
+  <li><b>Emergency and no-advice checks</b> by voice after every prompt change.</li>
+  <li><b>Interrupting</b>: stop time measured 0.5–2.2 s across runs (limit 1.5 s); recheck on the phone path.</li>
+</ul>
+<h3>Known gaps today</h3>
+<ul>
+  <li>TTS failure leaves the caller in silence (Phase 4 fallback above).</li>
+  <li>The answer to "what services do you offer" is weak; the prompt should list services from <code>clinic.yaml</code>.</li>
+  <li>The hold-on line and the 0.4 s end-of-turn setting are covered by automated tests but have little live-call history yet.</li>
+</ul>
+
+<h2>9. Privacy and compliance (Alberta)</h2>
+<ul>
+  <li><b>Alberta Health Information Act (HIA)</b> applies to health information handled by custodians such as clinics. The clinic is the custodian; you are their affiliate or service provider. PIPEDA / PIPA (Alberta) may also apply.</li>
+  <li><b>During development:</b> fake patient data only. With Ollama and Kokoro the LLM and voice legs stay on the laptop; Deepgram, LiveKit and Groq still process test audio or text in the US.</li>
+  <li><b>Before go-live (non-negotiable):</b> cloud voice APIs send patient audio and transcripts outside Canada, so the clinic must accept that <b>explicitly and in writing</b>, with DPAs signed and the clinic's Privacy Impact Assessment signed off by their privacy officer.</li>
+</ul>
+<table>
+  <tr><th>Vendor in the call path</th><th>What it sees</th><th>Where</th></tr>
+  <tr><td>Twilio</td><td>Call audio, caller's number</td><td>US vendor; confirm processing region</td></tr>
+  <tr><td>LiveKit Cloud</td><td>Call audio in transit (recording off)</td><td>Depends on region; confirm</td></tr>
+  <tr><td>Deepgram</td><td>Caller audio, transcripts</td><td>US</td></tr>
+  <tr><td>LLM provider (hosted)</td><td>Transcripts, clinic prompt</td><td>US for Groq/OpenRouter/Together/DeepInfra; Canada if self-hosted</td></tr>
+  <tr><td>Cartesia</td><td>Reply text</td><td>US; Canada if replaced by self-hosted Kokoro</td></tr>
+  <tr><td>Email/SMS provider</td><td>Alert text (no patient details)</td><td>US</td></tr>
+</table>
+<p>The AI disclosure and recording notice are in the greeting, which can't be interrupted, and the config won't load without them. The agent never gives medical advice: emergencies go to 911, clinical questions go to staff. Sign a written agreement with the clinic covering data handling. This is not legal advice: have the clinic confirm compliance with their privacy officer or legal adviser.</p>
+
+<h2>10. Costs</h2>
+<h3>Testing phase (India): what it actually took</h3>
+<table>
+  <tr><th>Item</th><th>Planned (v1)</th><th>Actual so far</th></tr>
+  <tr><td>LiveKit Cloud</td><td>Free tier</td><td>Free tier</td></tr>
+  <tr><td>Deepgram</td><td>~$200 free credit</td><td>Free credit</td></tr>
+  <tr><td>Cartesia</td><td>Free tier</td><td>Free credit ran out mid-testing; replaced by Kokoro (free, self-hosted) for testing</td></tr>
+  <tr><td>LLM</td><td>Free tier or a few cents</td><td>OpenRouter needed paid credit (HTTP 402 at $0); testing moved to Ollama (free, local) and Groq's free tier</td></tr>
+  <tr><td>Twilio</td><td>Trial credit (~$15)</td><td>Not used yet</td></tr>
+  <tr><td><b>Total</b></td><td>~$0–20</td><td><b>Free tiers and local models only</b> (no paid credit recorded). Budget ~$10–20 for paid LLM and Cartesia credit for the final timed runs and Phase 2.</td></tr>
+</table>
+<h3>Production (per clinic, per month, approximately; unchanged from v1)</h3>
+<table>
+  <tr><th>Item</th><th>Approximate price</th><th>For 1,000 call minutes/month</th></tr>
+  <tr><td>Twilio Calgary number</td><td>$1–2/month</td><td>$1–2</td></tr>
+  <tr><td>Twilio inbound voice / SIP</td><td>about $0.005–0.01/min</td><td>$5–10</td></tr>
+  <tr><td>LiveKit Cloud (or self-host)</td><td>about $0.01/min, or the server cost</td><td>$10</td></tr>
+  <tr><td>Deepgram STT</td><td>about $0.004–0.008/min</td><td>$4–8</td></tr>
+  <tr><td>Cartesia / ElevenLabs TTS</td><td>about $0.02–0.08/min</td><td>$20–80</td></tr>
+  <tr><td>LLM, hosted Qwen (paid tier)</td><td>fractions of a cent per call</td><td>$1–5</td></tr>
+  <tr><td>LLM, self-hosted Qwen on a GPU server</td><td>$300–800/month per GPU server</td><td>$300–800</td></tr>
+  <tr><td>Agent + backend server (AWS)</td><td>$20–60/month</td><td>$20–60</td></tr>
+  <tr><td>Database (RDS small)</td><td>$15–30/month</td><td>$15–30</td></tr>
+</table>
+<p><b>Rough total per clinic:</b> about $80–200/month with hosted APIs; about $400–1,000/month with a self-hosted GPU LLM. One GPU server can be shared across several clinics' deployments, with separate databases. A GPU server could also run Kokoro, cutting the TTS line to near zero; that only pays off across several clinics.</p>
+<p><b>What to charge the client (suggestion):</b> a one-time setup fee for the build, integration and testing, plus a monthly fee covering usage, maintenance and support, priced above running costs.</p>
+
+<h2>11. Hosted LLM APIs: what we learned</h2>
+<table>
+  <tr><th style="width:15%">Provider</th><th>Models</th><th style="width:22%">Approx. price</th><th style="width:30%">Notes from testing (Nov 2026)</th></tr>
+  <tr><td>Groq</td><td>Open models; Qwen 3.8 27B, GPT-OSS 20B/120B on this account</td><td>about $0.10–0.80 per million tokens</td><td>Fastest tested: 0.29 s to first token. No 7B–14B Qwen offered. Free tier ~7,000 input tokens/min: a call resends ~2,500 tokens per request, so calls fail after about two turns. Paid tier needed. US.</td></tr>
+  <tr><td>OpenRouter</td><td>Qwen, GLM, many others (routes to other hosts)</td><td>depends on the host, often under $1 per million tokens</td><td>Qwen 9B: ~0.6 s to first token; hosts vary (pin the fast ones with tool support). Free tier: 50 requests/day until $10 credit. Location varies by host.</td></tr>
+  <tr><td>Together AI</td><td>Qwen, GLM, Llama</td><td>about $0.20–1.20 per million tokens</td><td>Among the fastest OpenRouter hosts measured. US.</td></tr>
+  <tr><td>DeepInfra</td><td>Qwen, GLM</td><td>about $0.05–0.80 per million tokens</td><td>Among the fastest OpenRouter hosts measured. US.</td></tr>
+  <tr><td>Alibaba Model Studio</td><td>Qwen (official)</td><td>low, varies by model</td><td>Not tested. Outside Canada.</td></tr>
+  <tr><td>Ollama (local)</td><td>Qwen3 8B, Qwen 2.5 7B</td><td>Free</td><td>Development default. Needs ~6 GB of GPU memory and enough RAM; stays on the machine.</td></tr>
+</table>
+<p>Connecting any of them is a <code>.env</code> change: <code>LLM_BASE_URL</code>, <code>LLM_API_KEY</code>, <code>LLM_MODEL</code> and, if needed, <code>LLM_EXTRA_BODY</code>. <b>Privacy note:</b> the hosted ones process data outside Canada. Use them with fake data for testing; for production, self-host in Canada or get the clinic's written privacy sign-off.</p>
+
+<h2>12. Database and staff dashboard</h2>
+<p><b>Tables built (PostgreSQL, Alembic migrations):</b> <code>calls</code> (caller, times, reason, urgency, outcome, summary, transcript, per-reply latency, status), <code>appointment_requests</code>, <code>messages</code>, <code>staff_users</code>, <code>audit_log</code> (every staff read and write of a patient record). Without it, messages vanish when the call ends and there is no record for staff or audits. In production: RDS in <code>ca-west-1</code>, encrypted.</p>
+<p><b>Dashboard built:</b> staff login with session cookies; call list newest first with New / Urgent / Today filters and search; call detail with summary, transcript and requested appointment; mark handled, add a note, assign; live updates over WebSocket with a sound. <b>For production:</b> HTTPS, optional two-factor sign-in, and alerts by email or SMS ("New urgent call, check the dashboard", no patient details).</p>
+
+<h2>13. Connecting the clinic's existing phone number (unchanged from v1)</h2>
+<table>
+  <tr><th>Option</th><th>How it works</th><th>Extra cost</th><th>Setup time</th><th>Best when</th></tr>
+  <tr><td>1. Call forwarding</td><td>The clinic's provider forwards calls to a hidden Twilio number connected to LiveKit</td><td>~$1–2/month + per-minute</td><td>Same day</td><td>Landline or any provider; quickest start</td></tr>
+  <tr><td>2. Port the number</td><td>The number moves to Twilio and goes straight into LiveKit over SIP</td><td>Usually free or a few dollars</td><td>1–3 weeks in Canada</td><td>Full control long term</td></tr>
+  <tr><td>3. Direct SIP</td><td>The clinic's VoIP (RingCentral, Telus Business Connect) sends calls over SIP to LiveKit</td><td>None for a number</td><td>1–3 days</td><td>Clinic already uses SIP-capable VoIP</td></tr>
+</table>
+<p>Forwarding modes: <b>always</b>, <b>busy / no answer</b> (e.g. after 4 rings), or <b>after hours</b>. The agent reads the caller's original number from the SIP <code>From</code> header so the dashboard shows the patient's real number.</p>
+<p><b>Questions for the clinic:</b> who is the phone provider; landline or VoIP; should the AI take all calls, missed calls or after-hours calls; which number urgent calls transfer to and who answers it; who has admin access to the phone account; which booking software they use; their FAQ answers in their own words; what must always reach a human; whether they accept US vendors processing patient audio, and who signs off.</p>
+
+<h2>14. Timeline (rough)</h2>
+<table>
+  <tr><th style="width:22%">When</th><th>Work</th><th style="width:20%">Status</th></tr>
+  <tr><td>7–11 Nov 2026</td><td>Phase 0 accounts; Phase 1 local system: agent, tools, guardrails, backend, database, dashboard, testing, latency</td><td class="ok">Done</td></tr>
+  <tr><td>Next ~1 week</td><td>Phase 2: Twilio number, SIP trunk, real phone calls, real-call latency, transfer</td><td>Needs Twilio account</td></tr>
+  <tr><td>When the clinic answers</td><td>Phase 3: booking system integration</td><td>Waiting on clinic</td></tr>
+  <tr><td>~1–2 weeks, overlapping</td><td>Phase 4: dead-air fallback, rate limiting, encryption, retention; DPAs, PIA, privacy sign-off</td><td>Paperwork depends on the clinic</td></tr>
+  <tr><td>~1 week, then 3 weeks of rollout</td><td>Phase 5: AWS <code>ca-west-1</code>, monitoring, backups; after-hours → overflow → all calls</td><td>After Phase 4 sign-off</td></tr>
+</table>
+
+<h2>15. Checklist before go-live</h2>
+<ul style="list-style: none; padding-left: 4pt;">
+  <li>☐ AI disclosure and recording notice in the greeting, heard on a real phone call</li>
+  <li>☐ Emergency handling (911) tested on live phone calls, not just the Playground</li>
+  <li>☐ Human transfer tested to the clinic's real urgent number</li>
+  <li>☐ No medical advice, verified across the scripted scenario set</li>
+  <li>☐ Patient data stored in Canada and encrypted at rest</li>
+  <li>☐ Agreements signed with the clinic and every vendor (DPAs, zero retention on)</li>
+  <li>☐ Clinic's Privacy Impact Assessment complete and signed off by their privacy officer</li>
+  <li>☐ Median latency under 1.5 s on real phone calls</li>
+  <li>☐ Call logs, dashboard and staff notifications working</li>
+  <li>☐ Monitoring and alerts live, with someone on the other end of them</li>
+  <li>☐ Fallback tested: agent killed mid-call and TTS failing, calls still reach the clinic</li>
+  <li>☐ Front desk trained on the dashboard</li>
+  <li>☐ Rollback plan written: how to turn the AI off in under five minutes</li>
+</ul>
+
+</body>
+</html>

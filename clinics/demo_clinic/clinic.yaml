@@ -161,6 +161,9 @@ voice:
   # Cartesia voice_id: 1242fb95-7ddd-44ac-8a05-9e8a22a6137d   # Cartesia "Cindy - Receptionist"
   voice_id: af_heart                   # Kokoro voice (American English, female)
   language: en-CA
+  # Silence (s) before the caller's turn counts as finished; part of every reply's delay.
+  # Default 0.55. Lower answers sooner but may cut in when a caller pauses mid-sentence.
+  end_of_turn_silence: 0.4
 
 booking:
   provider: manual                     # staff confirm every request from the dashboard

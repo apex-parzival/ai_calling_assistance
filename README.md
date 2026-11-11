@@ -3,9 +3,10 @@
 AI phone receptionist for a medical clinic in Calgary, Alberta. One shared codebase,
 one `clinics/<name>/` folder per clinic. See [`CLAUDE.md`](CLAUDE.md) for the full build brief.
 
-**Status:** Phase 1 code complete and tested against the real LLM in text mode (22/22 scenarios).
-A real voice call still needs the LiveKit secret. See [Phase 1 status](#phase-1-status) and the
-full [task list](docs/TASKS.md).
+**Status (2026-11-11):** Phase 1 complete: all five exit criteria met, including a median reply
+time of 1.21 s on real voice calls. Phase 2 (telephony) is next. See [Phase 1 status](#phase-1-status),
+the [task list](docs/TASKS.md), the [runbook](docs/RUNBOOK.md) (every command, and how to test the
+whole system) and the Build & Deployment Guide (v2) PDF (what changes for production).
 
 ## Layout
 
@@ -98,6 +99,15 @@ Measured on an RTX 5050 laptop: `qwen3-clinic` passed 22/22 text scenarios and 8
 runs (booking, cancel, message, transfer), ~0.3 s to first token. `qwen2.5:7b` (`Modelfile`,
 `qwen-clinic`) is a little faster but completed the multi-step runs only 4 times in 8.
 
+## Groq for timed tests
+
+`clinics/demo_clinic/.env` keeps a commented-out Groq block next to the Ollama one; swap which is
+active (see [runbook](docs/RUNBOOK.md) §1.2). Groq serves no 7–14B Qwen today; `qwen/qwen3.8-27b`
+measured 0.29 s to first token. Its free tier allows ~7,000 input tokens per minute and every
+request resends the ~2,500-token prompt, so a call past about two turns gets HTTP 429 (the agent
+then plays its "technical problem" fallback). Use it for short timed runs, spaced out
+(`voicetest --pause 45`); use Ollama for everything else.
+
 ## Text to speech: Kokoro locally, Cartesia in production
 
 `clinic.yaml` → `voice.tts_provider` picks the voice; switching is a config change only.
@@ -111,8 +121,7 @@ runs (booking, cancel, message, transfer), ~0.3 s to first token. `qwen2.5:7b` (
 The demo clinic currently uses Kokoro; its Cartesia voice ID is kept in a comment in `clinic.yaml`.
 Only the selected provider's settings are required: the agent and `check_env` name the missing
 variable if they aren't set. Inside docker compose the agent reaches Kokoro at `http://kokoro:8880/v1`.
-Locally Kokoro runs on the CPU, because the local Qwen model takes most of an 8 GB GPU; the GPU
-image (commented out in `docker-compose.yml`) is for the production server.
+The base compose file runs Kokoro on the CPU; the GPU override below is what the timed runs used.
 
 The voice test caller (`voicetest`) speaks its own lines through Kokoro too (voice `am_michael`),
 so voice tests need no Cartesia credit; `--caller-tts cartesia` switches it back.
@@ -130,6 +139,17 @@ docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.kokoro-gpu.
 It builds `deploy/Dockerfile.kokoro-gpu`, which swaps in a CUDA 12.8 PyTorch: the upstream GPU image
 fails on RTX 50xx (Blackwell) cards with "no kernel image is available". On an 8 GB laptop GPU it
 fits next to `qwen3-clinic`, but the two share the GPU, so the LLM gets slower.
+
+## Turn-taking
+
+`clinic.yaml` → `voice.end_of_turn_silence` (seconds, default 0.55) is how long the caller must be
+silent before the agent answers. It sets both Silero's silence window and LiveKit's endpointing
+delay; Silero's window was the real floor, so changing LiveKit's alone did nothing. The demo clinic
+uses 0.4. Lower answers sooner but can cut in when a caller pauses mid-sentence (reading out a
+number); re-tune it on real phone calls.
+
+When a tool starts and the model hasn't said anything yet, the agent says a short hold-on line
+("Let me check that for you") while the answer is generated, so the caller isn't left in silence.
 
 ## Run locally (no Docker)
 
@@ -164,6 +184,7 @@ pytest                                    # full suite, no keys needed
 python -m tests.scenarios.live_text --write   # the scenarios against the REAL LLM (text mode, costs cents)
 # Real voice calls: a synthetic caller joins LiveKit and talks to the running agent
 docker compose -f deploy/docker-compose.yml --profile agent --profile test run --rm voicetest --write
+#   on Groq's free tier add --pause 45 (seconds between scenarios)
 python -m tests.scenarios.simulate_call --email ... --password ...   # hang-up -> dashboard timing
 python -m backend.cli latency-report --write                          # median latency per leg
 ```
@@ -197,8 +218,8 @@ All of these are in code and covered by tests; the prompt repeats them, but noth
 
 | Exit criterion | Status |
 | --- | --- |
-| Browser call books an appointment; on dashboard within 1 s of hang-up | Booking works end to end with the real LLM (text mode); backend → dashboard ~10 ms. **One real voice call still needed (LiveKit secret).** |
-| Emergency → 911 response every time, 10 attempts | 10/10 in code tests, and 10/10 with the real LLM across 10 different phrasings. Re-check once by voice. |
-| No medical advice in any scripted scenario | None in 22 real-LLM scenarios, 4 of them advice bait ([reports](docs/scenario-runs/)). Re-check once by voice. |
-| Median reply latency under 1.5 s, written down | LLM alone: 0.61 s median to first token (`qwen/qwen3.5-9b`). **Full voice latency needs a real call.** |
-| Second clinic runs with no code change | Passes (`tests/test_second_clinic.py`). |
+| Browser call books an appointment; on dashboard within 1 s of hang-up | **Met.** Voice booking over LiveKit: on the dashboard 0.05 s after hang-up. Human Playground call works (2026-11-11). |
+| Emergency → 911 response every time, 10 attempts | **Met.** 10/10 in code tests, 10/10 with the real LLM across 10 phrasings, and by voice. |
+| No medical advice in any scripted scenario | **Met.** None in 22 real-LLM scenarios (4 of them advice bait) or in voice runs ([reports](docs/scenario-runs/)). |
+| Median reply latency under 1.5 s, written down | **Met.** Groq + Kokoro on the GPU: caller hears median 1.21 s, agent-side 1.08 s ([report](docs/scenario-runs/2026-11-11-144240-voice.md), [log](docs/phase1-testing.md#results-log)). Re-measure on the production LLM and real phone calls. |
+| Second clinic runs with no code change | **Met** (`tests/test_second_clinic.py`). |

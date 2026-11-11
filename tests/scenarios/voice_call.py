@@ -447,6 +447,9 @@ async def main() -> int:
     ap.add_argument("--write", action="store_true", help="save the report under docs/scenario-runs/")
     ap.add_argument("--caller-tts", choices=["kokoro", "cartesia"], default="kokoro",
                     help="voice for the test caller's own lines (default: kokoro, no Cartesia credit used)")
+    ap.add_argument("--pause", type=float, default=2.0, metavar="SECONDS",
+                    help="wait between scenarios (default 2). On Groq's free tier (8,000 tokens/min, and "
+                         "each LLM request resends the ~2,500-token prompt) use about 45")
     args = ap.parse_args()
     if unknown := [n for n in args.only if n not in SCENARIOS]:
         ap.error(f"unknown scenario(s): {', '.join(unknown)}")
@@ -468,7 +471,7 @@ async def main() -> int:
               + "".join(f"\n         - {p}" for p in res.problems)
               + "".join(f"\n         . {n}" for n in res.notes), flush=True)
         results.append(res)
-        await asyncio.sleep(2)  # let the agent finish the previous job
+        await asyncio.sleep(args.pause)  # let the agent finish the previous job (and rate limits reset)
     await engine.dispose()
 
     lat = [t.latency for r in results for t in r.turns if t.latency is not None]

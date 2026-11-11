@@ -111,6 +111,11 @@ class Voice(_Strict):
     # backend can start before vendor accounts exist.
     voice_id: str | None = None
     language: str = "en-CA"
+    # Seconds of silence before the caller's turn counts as finished (Silero VAD silence window
+    # and LiveKit endpointing delay). This wait is part of every reply's latency. Lower answers
+    # sooner but can cut in on callers who pause mid-sentence, e.g. while reading out a number.
+    # 0.55 is the LiveKit/Silero default.
+    end_of_turn_silence: float = Field(default=0.55, ge=0.25, le=1.5)
 
 
 class Booking(_Strict):

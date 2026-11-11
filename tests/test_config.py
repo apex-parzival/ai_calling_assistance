@@ -87,6 +87,15 @@ def test_staff_contact_required(tmp_path, demo_raw):
         load_clinic_config(write(tmp_path, demo_raw))
 
 
+def test_end_of_turn_silence_default_and_bounds(tmp_path, demo_raw):
+    demo_raw["voice"].pop("end_of_turn_silence", None)
+    assert load_clinic_config(write(tmp_path, demo_raw)).voice.end_of_turn_silence == 0.55  # LiveKit default
+    for bad in (0.1, 3):  # too short cuts callers off mid-sentence; too long is dead air
+        demo_raw["voice"]["end_of_turn_silence"] = bad
+        with pytest.raises(ConfigError, match="end_of_turn_silence"):
+            load_clinic_config(write(tmp_path, demo_raw))
+
+
 def test_duplicate_service_ids_rejected(tmp_path, demo_raw):
     demo_raw["services"].append(dict(demo_raw["services"][0]))
     with pytest.raises(ConfigError, match="duplicate"):

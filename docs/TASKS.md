@@ -1,6 +1,6 @@
 # Task list
 
-Progress against the phases in [`CLAUDE.md`](../CLAUDE.md). Updated 2026-11-09.
+Progress against the phases in [`CLAUDE.md`](../CLAUDE.md). Updated 2026-11-11: **all Phase 1 exit criteria met.**
 
 ## Live progress (current session)
 
@@ -59,6 +59,16 @@ Updated after every step. `[x]` done · `[>]` working on it now · `[ ]` next.
 | [~] | Voice run with GPU Kokoro: 6/7 (interrupt 1.55 s vs 1.5 s limit); agent-side median 2.03 s: LLM slows when sharing the GPU | not yet under 1.5 s |
 | [ ] | Agent's answer to "tell me about your services" is weak (doesn't list them from clinic.yaml) | Claude |
 | [!] | Kokoro on this CPU is slow: TTS first audio 0.73–4.16 s (Cartesia 0.13–0.17 s), worst on booking turns; agent-side median 2.7 s; pauses over 1 s between sentences of one reply | fine for behaviour tests, not for latency. Measure latency on Cartesia or Kokoro on a GPU |
+| [x] | **2026-11-11.** Found: the ~0.58 s end-of-speech wait is Silero's 0.55 s silence window, so LiveKit's delay alone changes nothing. New `voice.end_of_turn_silence` in `clinic.yaml` sets both (default 0.55; demo 0.4) | config test added |
+| [x] | Hold-on line ("Let me check that for you") when a tool starts and the model hasn't spoken; not added to the model's history | 2 session tests; 221 pass |
+| [x] | Groq for timed tests (CLAUDE.md): key copied from `sec.txt`; `qwen/qwen3.8-27b` (no 7–14B Qwen on Groq), 0.29 s to first token, tool calls OK; warm-up off there | `check_env --live` all ok |
+| [x] | Voice run: Groq + Kokoro on the GPU alone | 5/7; **caller hears median 1.21 s** (p90 2.18 s), agent-side 1.08 s; end-of-speech wait 0.42–0.48 s. Interrupt + booking failed on Groq's free-tier limit (429, 7,000 input tokens/min), not the agent |
+| [x] | Voice test `--pause` between scenarios (rate limits) | |
+| [x] | `docs/RUNBOOK.md`: every command with its constraints and where to run it, plus the full test sequence | |
+| [x] | **Human call in the LiveKit Playground** (local Ollama): works | you |
+| [x] | Build & Deployment Guide v2 (PDF + HTML source): what was built, tested and measured, and what changes for production | |
+| [ ] | Production LLM: a paid tier (Groq free tier can't hold a call past ~2 turns) and the model-size decision | you + Claude |
+| [ ] | Re-tune `end_of_turn_silence` on real phone audio (Phase 2) | Claude |
 
 `[x]` done and verified · `[~]` built, but not yet verified the way the exit criterion asks · `[ ]` not started.
 **Who** says who has to do it: *you* (needs your accounts, card, 2FA or admin rights), *Claude*, or *clinic*.
@@ -68,12 +78,12 @@ Updated after every step. `[x]` done · `[>]` working on it now · `[ ]` next.
 | Phase | Done | Partly | To do | Status |
 |---|---|---|---|---|
 | 0 Accounts and prerequisites | 14 | 0 | 1 | **Exit check passed** (only Twilio left, needed in Phase 2) |
-| 1 Local vertical slice | 28 | 1 | 2 | 4 of 5 exit criteria passed; latency still over 1.5 s |
-| 2 Telephony | 0 | 1 | 10 | Not started (blocked by Phase 1) |
+| 1 Local vertical slice | 31 | 0 | 0 | **All 5 exit criteria met** (2026-11-11) |
+| 2 Telephony | 0 | 1 | 10 | Next: needs your Twilio account |
 | 3 Booking integration | 1 | 0 | 3 | Blocked: clinic hasn't named its booking system |
 | 4 Hardening and compliance | 3 | 3 | 12 | Not started |
 | 5 Canadian deployment | 1 | 0 | 9 | Not started |
-| **Total** | **47** | **5** | **37** | **47 of 89 items done (53%)** |
+| **Total** | **50** | **4** | **35** | **50 of 89 items done (56%)** |
 
 Phases 2–5 have bigger items than Phase 0–1, so by effort it's closer to a third done.
 
@@ -141,11 +151,11 @@ Phases 2–5 have bigger items than Phase 0–1, so by effort it's closer to a t
 
 | | Task | Who |
 |---|---|---|
-| [x] | 206 automated tests (no keys needed) | Claude |
+| [x] | 221 automated tests (no keys needed) | Claude |
 | [x] | Text-mode scenario runner against the real LLM: `python -m tests.scenarios.live_text`. 22/22 passed ([report](scenario-runs/)) | Claude |
 | [x] | Real voice calls through LiveKit with a synthetic caller (`tests/scenarios/voice_call.py`, in Docker): all 7 pass (greeting talked over, FAQ, noise, interrupt, emergency, advice, booking, silence); run on local Ollama | Claude |
-| [ ] | One call by a human in the LiveKit Playground (real voice, real mic) | you |
-| [ ] | Add the Playground results to the log in `docs/phase1-testing.md` | you + Claude |
+| [x] | One call by a human in the LiveKit Playground (real voice, real mic): works (2026-11-11, local Ollama) | you |
+| [x] | Results in the log in `docs/phase1-testing.md` | you + Claude |
 
 ### Phase 1 exit criteria
 
@@ -154,7 +164,7 @@ Phases 2–5 have bigger items than Phase 0–1, so by effort it's closer to a t
 | [x] | Browser call books an appointment; on the dashboard within 1 s of hang-up | Voice booking over LiveKit (synthetic caller, local Ollama): request in Postgres and on the dashboard 0.05 s after hang-up. A human Playground call is still on the list below. |
 | [x] | Emergency → 911 response every time, 10 attempts | 10/10 in code tests, 10/10 with the real LLM, and by real voice call (1.12 s). |
 | [x] | No medical advice in any scripted scenario | 0 advice in 22 real-LLM scenarios (4 of them advice bait). Re-check once by voice. |
-| [~] | Median reply latency under 1.5 s, measured and written down | Local Ollama + prompt-cache warm-up: agent-side median 1.39 s (under target), but the caller hears a median of 2.01 s (WebRTC + playout on top). Slowest turns are the ones with a tool call. To decide: which number counts, and a re-run on the hosted model. |
+| [x] | Median reply latency under 1.5 s, measured and written down | Groq + Kokoro on the GPU (2026-11-11): **caller hears median 1.21 s**, agent-side 1.08 s ([report](scenario-runs/2026-11-11-144240-voice.md)). Caveat: Groq's free tier cut longer calls off, so re-measure on the production LLM and on real phone calls. |
 | [x] | Second clinic runs with no code change | `tests/test_second_clinic.py` |
 
 ## Phase 2: Telephony (blocked until Phase 1 passes)
@@ -224,7 +234,7 @@ Phases 2–5 have bigger items than Phase 0–1, so by effort it's closer to a t
 
 ## Your next steps
 
-1. **Add OpenRouter credit** at openrouter.ai → Settings → Credits (about $5 is plenty for testing). The account is on the free tier with $0 credit, so the agent's real requests get HTTP 402 and replies stall. Tell Claude when it's done.
-2. **Make one call yourself** in the [LiveKit Agents Playground](https://agents-playground.livekit.io) with your microphone (the agent is running in Docker). The synthetic caller can't judge how the voice *sounds*.
-3. **Delete `sec.txt`.** The keys are in `clinics/demo_clinic/.env` now and all validate. It's git-ignored, but it's a second plain-text copy of every key.
-4. Optional, for Phase 2: Twilio account SID + auth token.
+1. **Delete `sec.txt`.** Every key in it is in `clinics/demo_clinic/.env` now and validates. It's git-ignored, but it's a second plain-text copy of every key.
+2. **Phase 2: create a Twilio account** and put the account SID and auth token in `.env`. Then Claude wires up the SIP trunk and you make real phone calls.
+3. **Decide the production LLM**: a paid Groq or OpenRouter tier (with a DPA), or self-hosted Qwen in Canada. Free tiers can't hold a real call.
+4. Run and test commands: [`docs/RUNBOOK.md`](RUNBOOK.md). What changes for production: §8 of the Build & Deployment Guide (v2).

@@ -69,8 +69,8 @@ def make_session(clean_env, clinics_root, tmp_path, backend_calls):
         backend_calls.append((request.url.path, json.loads(request.content or b"{}")))
         return httpx.Response(200, json={"id": str(uuid.uuid4())})
 
-    async def make(replies: list[str], warmup_llm=None):
-        scripted = ScriptedLLM(replies)
+    async def make(replies: list[str], warmup_llm=None, scripted: ScriptedLLM | None = None):
+        scripted = scripted or ScriptedLLM(replies)
         backend = BackendClient(settings, spool_dir=tmp_path / "spool", transport=httpx.MockTransport(handler))
         state = CallState()
         agent = Receptionist(clinic, settings, backend, state, job_ctx=None, warmup_llm=warmup_llm)
@@ -249,6 +249,65 @@ async def test_detached_task_keeps_context_but_not_speech_handle():
         return other.get(None), _SpeechHandleContextVar.get(None)
 
     assert await _detached(look()) == ("http-session", None)
+
+
+class _ToolCallLLM(ScriptedLLM):
+    """First request: optional words, then a check_availability call. Later requests: an answer."""
+
+    def __init__(self, preamble: str = "") -> None:
+        super().__init__(["We have nine a.m. open."])
+        self.preamble = preamble
+
+    def chat(self, *, chat_ctx, tools=None, conn_options=DEFAULT_API_CONNECT_OPTIONS, **kw):
+        if self.requests:
+            return super().chat(chat_ctx=chat_ctx, tools=tools, conn_options=conn_options, **kw)
+        self.requests.append(chat_ctx.copy())
+        return _ToolCallStream(self, chat_ctx=chat_ctx, tools=tools or [], conn_options=conn_options,
+                               text=self.preamble)
+
+
+class _ToolCallStream(_ScriptedStream):
+    async def _run(self) -> None:
+        await super()._run()
+        self._event_ch.send_nowait(llm.ChatChunk(id="s", delta=llm.ChoiceDelta(role="assistant", tool_calls=[
+            llm.FunctionToolCall(name="check_availability", call_id="c1",
+                                 arguments='{"date": "2026-11-20", "service": "standard_visit"}')])))
+
+
+async def _spoken_during(session, user_input: str) -> list[str]:
+    spoken: list[str] = []
+    real_say = session.say
+
+    def say(text, **kw):
+        spoken.append(text)
+        return real_say(text, **kw)
+
+    session.say = say
+    result = await session.run(user_input=user_input)
+    await result
+    return spoken
+
+
+@pytest.mark.anyio
+async def test_silent_tool_call_gets_a_hold_on_line(make_session):
+    from core.agent import HOLD_ON
+
+    session, agent, model = await make_session([], scripted=_ToolCallLLM())
+    async with session:
+        spoken = await _spoken_during(session, "anything open on the twentieth?")
+    assert len(model.requests) == 2  # the tool ran and the model answered from its result
+    assert spoken == [HOLD_ON["check_availability"]]
+    # never in the model's history, so it can't echo it or treat it as said
+    assert HOLD_ON["check_availability"] not in [getattr(i, "text_content", None) for i in agent.chat_ctx.items]
+
+
+@pytest.mark.anyio
+async def test_no_hold_on_line_when_the_model_already_spoke(make_session):
+    session, _, model = await make_session([], scripted=_ToolCallLLM(preamble="Let me look at the twentieth."))
+    async with session:
+        spoken = await _spoken_during(session, "anything open on the twentieth?")
+    assert len(model.requests) == 2
+    assert spoken == []
 
 
 class _RecordingWarmup(ScriptedLLM):

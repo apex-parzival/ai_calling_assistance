@@ -50,6 +50,14 @@ TURN_LIMIT_MESSAGE = ("I want to make sure you get the right help, so I'll have 
                       "with you. Thank you for calling. Goodbye.")
 TIME_LIMIT_MESSAGE = ("We've been on the line for a while, so I'll have someone from the clinic call you back. "
                       "Thank you for calling. Goodbye.")
+# Said when a tool starts and the model hasn't said anything this step, so the caller hears
+# something while the tool runs and the model writes its answer (otherwise 1-2 s of silence).
+HOLD_ON = {
+    "check_availability": "Let me check that for you.",
+    "book_appointment": "One moment while I put that in.",
+    "cancel_appointment": "One moment.",
+    "take_message": "One moment while I write that down.",
+}
 
 
 @functools.cache
@@ -91,6 +99,7 @@ class Receptionist(ReceptionistTools, Agent):
         self._screened: set[str] = set()
         self._flagged = False  # staff alerted about an emergency on this call
         self._pending_end: str | None = None  # turn-limit goodbye waiting for the message to commit
+        self._spoke_this_step = False  # the current LLM step has produced text for the caller
         super().__init__(instructions=build_system_prompt(
             clinic, dt.datetime.now(dt.timezone.utc), disable_thinking=settings.llm_disable_thinking))
 
@@ -239,6 +248,7 @@ class Receptionist(ReceptionistTools, Agent):
 
         # Guardrail 3: every sentence of every reply is checked before it reaches TTS.
         f = ReplyFilter()
+        self._spoke_this_step = False
         async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
             if isinstance(chunk, str):
                 text = chunk
@@ -249,6 +259,9 @@ class Receptionist(ReceptionistTools, Agent):
             else:
                 yield chunk  # tool calls, usage, flush markers
                 continue
+            # Set on arrival, not on emit: the filter holds a sentence back until it ends, and
+            # a tool can start before that ("Let me check" + tool call). No hold-on line then.
+            self._spoke_this_step |= bool(text.strip())
             for sentence in f.feed(text):
                 yield sentence + " "
         for sentence in f.flush():
@@ -260,6 +273,21 @@ class Receptionist(ReceptionistTools, Agent):
 
     def history(self) -> list[tuple[str, str]]:
         return history_from_items(self.session.history.items)
+
+    def _hold_on(self, tool: str) -> None:
+        """Fill the silence while a tool runs, unless the model already spoke this step.
+
+        Not awaited and not added to the chat history (the model never sees it, so it can't
+        repeat or build on it). LiveKit queues it ahead of the tool's reply, which is being
+        generated meanwhile, so it costs no time.
+        """
+        if self._spoke_this_step or self._ending:
+            return
+        self._spoke_this_step = True
+        try:
+            self.session.say(HOLD_ON[tool], add_to_chat_ctx=False)
+        except RuntimeError:  # session closing; the reply itself will fail the same way
+            pass
 
     async def transfer(self, number: str, announcement: str) -> Any:
         if not self.state.sip_identity:
@@ -303,6 +331,7 @@ class Receptionist(ReceptionistTools, Agent):
             date: The day, as YYYY-MM-DD.
             service: The service id from the services list, e.g. standard_visit.
         """
+        self._hold_on("check_availability")
         return await self.do_check_availability(date, service)
 
     @function_tool()
@@ -317,6 +346,7 @@ class Receptionist(ReceptionistTools, Agent):
             time: The time, 24-hour HH:MM, exactly as returned by check_availability.
             service: The service id.
         """
+        self._hold_on("book_appointment")
         return await self.do_book_appointment(name, phone, date, time, service)
 
     @function_tool()
@@ -327,6 +357,7 @@ class Receptionist(ReceptionistTools, Agent):
             phone: The phone number the appointment is under, 10 digits.
             date: The appointment day, as YYYY-MM-DD.
         """
+        self._hold_on("cancel_appointment")
         return await self.do_cancel_appointment(phone, date)
 
     @function_tool()
@@ -338,6 +369,7 @@ class Receptionist(ReceptionistTools, Agent):
             phone: A 10-digit callback number.
             reason: What the message is about, in a sentence.
         """
+        self._hold_on("take_message")
         return await self.do_take_message(name, phone, reason)
 
     @function_tool()
@@ -353,7 +385,10 @@ server = AgentServer()
 
 
 def prewarm(proc: JobProcess) -> None:
-    proc.userdata["vad"] = silero.VAD.load()
+    _, clinic = config()
+    # Silero only reports end of speech after this much silence, so it bounds the turn-end wait
+    # whatever the endpointing delay is; the two are set together (clinic.yaml voice.end_of_turn_silence).
+    proc.userdata["vad"] = silero.VAD.load(min_silence_duration=clinic.voice.end_of_turn_silence)
     # Otherwise imported lazily on the first LLM call, blocking the event loop ~0.4 s mid-call.
     import openai.types.beta  # noqa: F401
 
@@ -445,6 +480,7 @@ async def entrypoint(ctx: JobContext) -> None:
         tts=make_tts(clinic, settings),
         vad=ctx.proc.userdata["vad"],
         user_away_timeout=clinic.limits.silence_reprompt_seconds,
+        turn_handling={"endpointing": {"min_delay": clinic.voice.end_of_turn_silence}},
         max_tool_steps=3,
         # A caller won't sit through silence: give up on a stalled LLM request after 4 s and
         # retry at once (default is 10 s, then a 2 s pause). A real call once stalled 19 s.
