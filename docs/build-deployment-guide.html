@@ -5,9 +5,10 @@
 <title>AI Clinic Voice Receptionist – Build &amp; Deployment Guide</title>
 <!--
   Source of "AI Clinic Voice Receptionist – Build & Deployment Guide (v2).pdf".
-  Regenerate (repo root, PowerShell):
+  Regenerate (repo root, PowerShell). Windows PowerShell 5.1 mangles the en dash in the PDF's name,
+  so print to a plain name, then rename it over the guide:
     & "C:\Program Files\Google\Chrome\Application\chrome.exe" --headless=new --no-pdf-header-footer `
-      --print-to-pdf="AI Clinic Voice Receptionist – Build & Deployment Guide (v2).pdf" docs\build-deployment-guide.html
+      --print-to-pdf="$PWD\guide.pdf" "file:///$($PWD -replace '\\','/')/docs/build-deployment-guide.html"
 -->
 <style>
   @page {
@@ -46,7 +47,7 @@
 <body>
 
 <h1>AI Clinic Voice Receptionist – Build &amp; Deployment Guide</h1>
-<div class="subtitle">Version 2 · 11 November 2026 · Updated from version 1 (7 November 2026) with what was actually built, how it was tested, what was measured, and what changes for production.</div>
+<div class="subtitle">Version 2.1 · 11 November 2026 · Updated from version 1 (7 November 2026) with what was actually built, how it was tested, what was measured, and what changes for production. Version 2.1 adds the short intake-only call flow the client asked for.</div>
 
 <p><b>Client location:</b> Calgary, Alberta, Canada. <b>Development and testing:</b> India. <b>Production deployment:</b> Canada (AWS <code>ca-west-1</code>, Calgary).</p>
 <p><b>Model:</b> one dedicated agent per clinic (single-tenant). Shared core codebase, separate config and deployment per clinic.</p>
@@ -55,6 +56,7 @@
 <div class="box">
 <h3>What changed since version 1</h3>
 <ul>
+  <li><b>New in 2.1: the client asked for a simpler call.</b> The agent now only takes the caller's request, name and number and promises a callback from the front desk within 30 minutes (§1). The full receptionist (booking, cancelling, messages, transfers, FAQs) is still in the code, switched off by commenting it out, and can be turned back on.</li>
   <li><b>Phase 0 and Phase 1 are built and tested.</b> The whole system (agent, backend, database, staff dashboard) runs on one laptop and has handled real browser calls through LiveKit, including a call by the developer in the LiveKit Playground on 11 Nov 2026.</li>
   <li><b>Development runs on local, free components:</b> Qwen3 8B on <b>Ollama</b> for the LLM and self-hosted <b>Kokoro</b> for the voice. No patient data and no test audio leave the laptop for those two legs. Cartesia stays the production voice; switching is one line in <code>clinic.yaml</code>.</li>
   <li><b>Timed tests use Groq</b> (Qwen 3.8 27B). The best measured run: <b>1.21 s</b> median from the end of the caller's sentence to the first sound of the reply, under the 1.5 s target.</li>
@@ -65,7 +67,18 @@
 </div>
 
 <h2>1. What the system does</h2>
-<p>A patient calls the clinic's Calgary phone number. The AI answers, understands what they say, replies in a natural voice and can:</p>
+<div class="box">
+<h3>Current call flow: intake only (client request, 11 Nov 2026)</h3>
+<ol>
+  <li>The AI answers and introduces itself: AI disclosure, recording notice and the 911 line, then <i>"Do you have a health question, or would you like to schedule an appointment?"</i></li>
+  <li>For an appointment it asks which service; for a health question it asks what it is about (and never answers it); anything else is noted in a few words.</li>
+  <li>It asks for the caller's full name and best callback number, and reads the number back as single digits for the caller to confirm.</li>
+  <li>It saves the request and says the clinic's fixed closing line: <i>"Our front desk receptionists are busy with other patients right now, but someone will call you back within 30 minutes. Goodbye."</i> Then it ends the call.</li>
+</ol>
+<p>The dashboard lists each call with <b>caller name, phone number, reason for the call and summary</b> (plus the time of the call, for the 30-minute promise). Emergency (911) and crisis (988) detection, the medical-advice filter, silence handling and the LLM-failure fallback all stay on.</p>
+<p class="small">The greeting and the closing line are in <code>clinic.yaml</code> (<code>greeting</code>, <code>callback_message</code>), so each clinic can word them. The agent has one tool in this flow, <code>save_callback_request</code>.</p>
+</div>
+<p><b>Full receptionist (built and tested, currently switched off).</b> A patient calls the clinic's Calgary phone number. The AI answers, understands what they say, replies in a natural voice and can:</p>
 <ul>
   <li>Answer FAQs (hours, location, services, parking, insurance), using only what is in the clinic's config file</li>
   <li>Take booking, rescheduling and cancellation requests (staff confirm them in the dashboard until the clinic's booking system is connected)</li>
@@ -73,6 +86,7 @@
   <li>Transfer urgent or clinical calls to a human, or tell callers to hang up and dial 911 in an emergency (988 for a mental-health crisis)</li>
 </ul>
 <p>Every call is saved with its transcript, a short summary and any request, and appears on the staff dashboard within about a second of hang-up.</p>
+<p><b>Switching back</b> is uncommenting: the five tools and the full prompt in <code>core/agent.py</code>, the old greeting in <code>clinic.yaml</code>, the old guardrail wording in <code>core/guardrails.py</code> and the old dashboard columns. The steps are written next to the commented code. The logic behind the five tools was never commented out and is still covered by the automated tests.</p>
 
 <h2>2. Technology stack: development vs production</h2>
 <table>
@@ -103,7 +117,7 @@
   <li><b>LiveKit → agent:</b> LiveKit dispatches the Python agent into the room. Audio streams both ways over WebRTC.</li>
   <li><b>Agent → Deepgram:</b> caller audio goes over a WebSocket; live text comes back.</li>
   <li><b>Agent → guardrails → LLM:</b> every caller message is screened for emergency and crisis language first. A match plays a fixed 911 or 988 message and never reaches the LLM. Otherwise the text, the conversation history and the clinic's system prompt go to the LLM (OpenAI-compatible API, streaming).</li>
-  <li><b>LLM → tools:</b> to check a slot, book, cancel, take a message or transfer, the LLM emits a tool call. The agent validates it and calls the FastAPI backend, which talks to the booking system and database.</li>
+  <li><b>LLM → tools:</b> in the intake flow, one tool saves the caller's request; in the full receptionist, the LLM checks slots, books, cancels, takes messages or transfers. Either way the LLM emits a tool call. The agent validates it and calls the FastAPI backend, which talks to the booking system and database.</li>
   <li><b>LLM → advice filter → TTS:</b> each sentence of the reply is checked for medical advice before it is spoken, then streamed to the TTS.</li>
   <li><b>Agent → LiveKit → Twilio → patient:</b> audio plays to the caller. Target: <b>under 1.5 s median</b> from the end of the caller's sentence to the first sound of the reply.</li>
   <li><b>After the call:</b> transcript, summary and any request are saved to PostgreSQL and pushed to the dashboard; urgent calls trigger a staff alert.</li>
@@ -183,6 +197,9 @@ tests/       pytest suite + scenarios/ (text and voice test callers)</pre>
   <li><b>Read-back in code:</b> booking, cancelling and messages are refused until the agent has read the phone number (and date and time) back and the caller has said yes. Small models get digits wrong; this stops a wrong number being saved.</li>
   <li>While a tool runs, the agent says a short line ("Let me check that for you") if it hasn't already said something, so the caller doesn't sit in silence.</li>
   <li>If the agent promises a callback but nothing was saved, the call is flagged "Needs action" on the dashboard.</li>
+  <li><b>Intake flow:</b> only <code>save_callback_request</code> (name, number, appointment / health question / other, details) is active. It uses the same read-back check on the phone number, then plays the fixed closing line and ends the call, so the model can't promise anything else.</li>
+  <li><b>Found with the real 8B model and fixed in code:</b> it sometimes repeated the greeting in every reply, and once read a safety rule from its own instructions aloud. Both are now removed from replies before they are spoken (the 9-1-1 sentence is never removed).</li>
+  <li><b>Found on a live call and fixed:</b> a number spoken as "seven zero, double two, ..." was counted one digit short, so the read-back check never matched and the agent kept asking. "Double" and "triple" are now understood, Deepgram returns numbers as digits, the agent reads numbers back as single digits, and after two failed checks a number the caller confirmed is saved with a "check the number" note instead of looping.</li>
   <li>Limits from <code>clinic.yaml</code>: re-prompt after silence, then hang up; maximum turns; maximum call length.</li>
 </ul>
 
@@ -208,10 +225,12 @@ tests/       pytest suite + scenarios/ (text and voice test callers)</pre>
 <p>All testing uses <b>fake patient data only</b>: fictional names and 403-555-01xx numbers.</p>
 <table>
   <tr><th style="width:22%">Layer</th><th>What it does</th><th style="width:24%">Result</th></tr>
-  <tr><td>Automated tests (<code>pytest</code>)</td><td>Guardrails, tools, backend, audit log, migrations, the second-clinic check, and the real agent inside a LiveKit session driven by a scripted LLM. No keys needed.</td><td class="ok">221 pass</td></tr>
+  <tr><td>Automated tests (<code>pytest</code>)</td><td>Guardrails, tools, backend, audit log, migrations, the second-clinic check, and the real agent inside a LiveKit session driven by a scripted LLM. No keys needed.</td><td class="ok">233 pass (2 skipped: tests of a full-receptionist tool that is switched off)</td></tr>
   <tr><td>Text scenarios against the real LLM</td><td>22 scripted conversations (FAQ, booking, cancel, message, transfer, emergency, advice bait, wrong number…), a second LLM playing the caller, checks done in code</td><td class="ok">22/22 (Qwen3 8B)</td></tr>
+  <tr><td>Intake flow, text scenarios against the real LLM</td><td>Appointment, health question and "something else" requests, plus 10 emergencies, crisis, 4 advice-bait questions and a wrong number</td><td class="ok">19/19 (Qwen3 8B on Ollama)</td></tr>
   <tr><td>Voice calls with a synthetic caller</td><td>A test caller joins a LiveKit room and speaks; 7 scenarios: greeting talked over, FAQ, background noise, interrupting, emergency, advice bait, booking, silence. Measures latency the way a caller hears it.</td><td class="ok">7/7 on local models; 5/7 on Groq (2 failed on Groq's rate limit)</td></tr>
   <tr><td>Human call in the LiveKit Playground</td><td>The developer called with a real microphone and ran the scenario list</td><td class="ok">Working (11 Nov 2026)</td></tr>
+  <tr><td>Human call, intake flow</td><td>The developer called through the new flow in the Playground</td><td class="ok">Working after the spoken-number fix (§5, Step 4)</td></tr>
 </table>
 
 <h3>Phase 1 exit criteria</h3>
@@ -265,6 +284,7 @@ tests/       pytest suite + scenarios/ (text and voice test callers)</pre>
   <tr><td>Security</td><td>Login with session cookies; audit log</td><td>Plus backend rate limiting, HTTPS everywhere, optional two-factor sign-in, session timeout reviewed</td><td>4</td></tr>
   <tr><td>Monitoring</td><td>Container logs</td><td>CloudWatch dashboards and alerts: call failures, latency over 2 s, provider errors, agent worker down, with a named person on the other end</td><td>5</td></tr>
   <tr><td>Settings</td><td><code>ENVIRONMENT=development</code></td><td><code>ENVIRONMENT=production</code>; real clinic content in <code>clinic.yaml</code> in the clinic's own words</td><td>5</td></tr>
+  <tr><td>Call flow</td><td>Intake only: request, name, number, "the front desk will call you back within 30 minutes"</td><td>The clinic must be able to keep the 30-minute promise whenever the AI answers. Add an after-hours closing line (agreed, to do) so callers aren't promised 30 minutes at night or on closed days. Turn the full receptionist back on if the clinic later wants booking by phone.</td><td>2–4</td></tr>
   <tr><td>Rollout</td><td>—</td><td>After-hours only → overflow (after 4 rings) → all calls, a week each with transcript review; rollback plan to turn the AI off in under five minutes</td><td>5</td></tr>
 </table>
 <h3>Must be re-done or re-measured in production</h3>
@@ -277,7 +297,9 @@ tests/       pytest suite + scenarios/ (text and voice test callers)</pre>
 <h3>Known gaps today</h3>
 <ul>
   <li>TTS failure leaves the caller in silence (Phase 4 fallback above).</li>
-  <li>The answer to "what services do you offer" is weak; the prompt should list services from <code>clinic.yaml</code>.</li>
+  <li>The closing line promises a callback within 30 minutes at any hour, including nights and closed days. An after-hours wording is agreed and still to be built.</li>
+  <li>The 911 message says "stay on the line and I'll connect you", but call transfer is switched off in the intake flow. Left as is by decision.</li>
+  <li>(Full receptionist) The answer to "what services do you offer" is weak; the prompt should list services from <code>clinic.yaml</code>.</li>
   <li>The hold-on line and the 0.4 s end-of-turn setting are covered by automated tests but have little live-call history yet.</li>
 </ul>
 
@@ -339,6 +361,7 @@ tests/       pytest suite + scenarios/ (text and voice test callers)</pre>
 
 <h2>12. Database and staff dashboard</h2>
 <p><b>Tables built (PostgreSQL, Alembic migrations):</b> <code>calls</code> (caller, times, reason, urgency, outcome, summary, transcript, per-reply latency, status), <code>appointment_requests</code>, <code>messages</code>, <code>staff_users</code>, <code>audit_log</code> (every staff read and write of a patient record). Without it, messages vanish when the call ends and there is no record for staff or audits. In production: RDS in <code>ca-west-1</code>, encrypted.</p>
+<p><b>Dashboard now (intake flow):</b> the call list shows caller name, phone number (formatted, e.g. (403) 555-0111), reason for the call, summary and the time of the call. The reason is labelled "Appointment request: …", "Health question: …" or "Other request: …". Clicking a call opens the full detail page. The old list columns (outcome, duration, status, assignee) are kept as a comment in the code.</p>
 <p><b>Dashboard built:</b> staff login with session cookies; call list newest first with New / Urgent / Today filters and search; call detail with summary, transcript and requested appointment; mark handled, add a note, assign; live updates over WebSocket with a sound. <b>For production:</b> HTTPS, optional two-factor sign-in, and alerts by email or SMS ("New urgent call, check the dashboard", no patient details).</p>
 
 <h2>13. Connecting the clinic's existing phone number (unchanged from v1)</h2>
@@ -355,6 +378,7 @@ tests/       pytest suite + scenarios/ (text and voice test callers)</pre>
 <table>
   <tr><th style="width:22%">When</th><th>Work</th><th style="width:20%">Status</th></tr>
   <tr><td>7–11 Nov 2026</td><td>Phase 0 accounts; Phase 1 local system: agent, tools, guardrails, backend, database, dashboard, testing, latency</td><td class="ok">Done</td></tr>
+  <tr><td>11 Nov 2026</td><td>Client change: intake-only call flow; dashboard list cut to name, number, reason, summary</td><td class="ok">Done, tested by voice</td></tr>
   <tr><td>Next ~1 week</td><td>Phase 2: Twilio number, SIP trunk, real phone calls, real-call latency, transfer</td><td>Needs Twilio account</td></tr>
   <tr><td>When the clinic answers</td><td>Phase 3: booking system integration</td><td>Waiting on clinic</td></tr>
   <tr><td>~1–2 weeks, overlapping</td><td>Phase 4: dead-air fallback, rate limiting, encryption, retention; DPAs, PIA, privacy sign-off</td><td>Paperwork depends on the clinic</td></tr>
@@ -375,6 +399,7 @@ tests/       pytest suite + scenarios/ (text and voice test callers)</pre>
   <li>☐ Monitoring and alerts live, with someone on the other end of them</li>
   <li>☐ Fallback tested: agent killed mid-call and TTS failing, calls still reach the clinic</li>
   <li>☐ Front desk trained on the dashboard</li>
+  <li>☐ Front desk can call every caller back within 30 minutes during the hours the AI answers; after-hours closing line in place</li>
   <li>☐ Rollback plan written: how to turn the AI off in under five minutes</li>
 </ul>
 
