@@ -13,14 +13,23 @@ _WORDS = {
 }
 
 
+_DIGIT_WORD = r"(?:zero|oh|o|one|two|three|four|five|six|seven|eight|nine|\d)"
+_REPEAT = re.compile(rf"\b(double|triple)[\s-]+({_DIGIT_WORD})\b", re.IGNORECASE)
+
+
+def digits_in(text: str) -> str:
+    """All digits in order, counting spoken forms: "seven zero, double two" -> "7022"."""
+    text = _REPEAT.sub(lambda m: " ".join([m.group(2)] * (2 if m.group(1).lower() == "double" else 3)), text.lower())
+    for word, digit in _WORDS.items():
+        text = re.sub(rf"\b{word}\b", digit, text)
+    return "".join(_DIGITS.findall(text))
+
+
 def normalize(raw: str | None) -> str | None:
     """Return +1NXXNXXXXXX, or None if this isn't a valid NANP number."""
     if not raw:
         return None
-    text = raw.lower()
-    for word, digit in _WORDS.items():
-        text = re.sub(rf"\b{word}\b", digit, text)
-    digits = "".join(_DIGITS.findall(text))
+    digits = digits_in(raw)
     if len(digits) == 11 and digits.startswith("1"):
         digits = digits[1:]
     if len(digits) != 10:

@@ -254,3 +254,79 @@ def test_readback_ok_with_spelled_digits_and_date_by_month():
 def test_readback_missing_date():
     h = [("assistant", "403 555 0111 at 9 a.m.?"), ("user", "yes")]
     assert "the date" in readback_problem(h, phone="+14035550111", date=dt.date(2027, 3, 2), time=dt.time(9, 0))
+
+
+# --- intake flow: save_callback_request ----------------------------------------
+
+
+@pytest.mark.anyio
+async def test_callback_request_saved_with_labelled_reason(env):
+    confirm(env, "So that's 5 8 7, 5 5 5, 0 1 2 3. Is that correct?")
+    saved, _ = await env.do_save_callback_request("Priya Natarajan", "587-555-0123", "health_question",
+                                                  "Ongoing headaches")
+    assert saved
+    [msg] = await rows(env, Message)
+    assert (msg.caller_name, msg.caller_phone) == ("Priya Natarajan", "+15875550123")
+    assert msg.reason == "Health question: Ongoing headaches"
+    [call] = await rows(env, Call)
+    assert call.caller_name == "Priya Natarajan" and call.caller_phone == "+15875550123"
+    assert env.state.outcome == "callback_requested"
+
+
+@pytest.mark.anyio
+async def test_callback_request_needs_number_read_back(env):
+    env.turns += [("assistant", "What's your number?"), ("user", "587 555 0123")]
+    saved, text = await env.do_save_callback_request("Priya Natarajan", "5875550123", "appointment", "Pap test")
+    assert not saved and text.startswith("NOT SAVED")
+    assert await rows(env, Message) == []
+
+
+@pytest.mark.anyio
+async def test_callback_request_bad_type_corrected_then_kept_as_last_resort(env):
+    confirm(env, "5 8 7, 5 5 5, 0 1 2 3, right?")
+    saved, text = await env.do_save_callback_request("Priya Natarajan", "5875550123", "refill", "Inhaler")
+    assert not saved and "request_type" in text
+    saved, _ = await env.do_save_callback_request("Priya Natarajan", "5875550123", "refill", "Inhaler")
+    assert saved  # never loses the caller: kept for staff, flagged as unvalidated
+    assert env.state.unsent_messages[0]["unvalidated"] is True
+
+
+@pytest.mark.anyio
+async def test_callback_request_survives_backend_outage(env, tmp_path, clean_env, clinics_root):
+    settings = load_settings(clinics_root=clinics_root)
+    env.backend = BackendClient(settings, spool_dir=tmp_path / "s4",
+                                transport=httpx.MockTransport(lambda r: httpx.Response(503)))
+    confirm(env, "5 8 7, 5 5 5, 0 1 2 3. Is that right?")
+    saved, _ = await env.do_save_callback_request("Priya Natarajan", "5875550123", "other", "Change my appointment")
+    assert saved
+    assert env.state.unsent_messages[0]["reason"] == "Other request: Change my appointment"
+
+
+def test_spoken_number_with_double_and_triple():
+    # From a live call: STT gave the number in words, with "double two".
+    from core import phone
+    assert phone.digits_in("Seven zero, double two, zero one two six nine seven") == "7022012697"
+    assert phone.normalize("four oh three, triple five, zero one one one") == "+14035550111"
+    assert phone.normalize("double-4 0 3") is None  # 11 digits, not a number
+
+
+@pytest.mark.anyio
+async def test_callback_request_saves_after_double_two_read_back(env):
+    confirm(env, "Seven zero, double two, zero one two six nine seven. Is that correct?", "Yes.")
+    saved, _ = await env.do_save_callback_request("Yasin Test", "7022012697", "appointment", "Vaccination")
+    assert saved
+    [msg] = await rows(env, Message)
+    assert msg.caller_phone == "+17022012697" and "check the number" not in msg.reason
+
+
+@pytest.mark.anyio
+async def test_callback_request_never_loops_when_caller_keeps_saying_yes(env):
+    # Seen live: the read-back check couldn't match, the caller said yes again and again.
+    confirm(env, "Your number is seven oh two, two oh one, two six nine. Is that correct?", "Yes.")
+    saved, text = await env.do_save_callback_request("Yasin Test", "7022012697", "appointment", "Vaccination")
+    assert not saved and text.startswith("NOT SAVED")
+    confirm(env, "Your number is seven oh two, two oh one, two six nine. Is that correct?", "Yes, it is correct.")
+    saved, _ = await env.do_save_callback_request("Yasin Test", "7022012697", "appointment", "Vaccination")
+    assert saved
+    [msg] = await rows(env, Message)
+    assert msg.reason.endswith("(check the number against the transcript)")

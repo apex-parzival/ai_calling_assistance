@@ -2,11 +2,14 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { StatusBadge, UrgencyBadge } from "@/components/Badges";
+// FULL RECEPTIONIST imports (for the commented-out columns below):
+// import { StatusBadge, UrgencyBadge } from "@/components/Badges";
+// import { duration, outcome, phone, when } from "@/lib/format";
+import { UrgencyBadge } from "@/components/Badges";
 import { TopBar } from "@/components/TopBar";
 import { api, type CallFilters, type CallSummary } from "@/lib/api";
 import { RequireAuth } from "@/lib/auth";
-import { duration, outcome, phone, when } from "@/lib/format";
+import { phone, when } from "@/lib/format";
 import { chime, unlockAudio, useLiveEvents, type LiveEvent } from "@/lib/live";
 
 type Tab = "all" | "new" | "urgent" | "today";
@@ -133,6 +136,38 @@ function CallList() {
         {!error && !loading && calls.length === 0 && <p className="empty">No calls here yet.</p>}
         {calls.length > 0 && (
           <table className="calls">
+            {/* Intake flow: caller name, phone number, reason for the call and the summary (plus when they
+                called, for the 30-minute callback). */}
+            <thead>
+              <tr>
+                <th>Caller name</th>
+                <th>Phone number</th>
+                <th>Reason for call</th>
+                <th>Summary</th>
+                <th className="hide-sm">Called</th>
+              </tr>
+            </thead>
+            <tbody>
+              {calls.map((c) => (
+                <tr key={c.id}
+                    className={[fresh.has(c.id) && "fresh", c.urgency !== "routine" && `row-${c.urgency}`].filter(Boolean).join(" ")}
+                    onClick={() => router.push(`/calls/${c.id}`)}>
+                  <td>
+                    <a href={`/calls/${c.id}`} className="caller" onClick={(e) => e.preventDefault()}>
+                      {c.caller_name ?? "Unknown caller"}
+                    </a>
+                  </td>
+                  <td>{phone(c.caller_phone)}</td>
+                  <td className="reason">
+                    {c.reason ?? <span className="sub">—</span>} <UrgencyBadge urgency={c.urgency} />
+                  </td>
+                  <td className="reason">{c.summary ?? <span className="sub">{c.ended_at ? "—" : "Call in progress"}</span>}</td>
+                  <td className="hide-sm">{when(c.started_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+            {/* FULL RECEPTIONIST columns (outcome, duration, status, assignee). To switch back, replace the
+                thead/tbody above with this one and restore the commented imports at the top of the file.
             <thead>
               <tr>
                 <th>Caller</th>
@@ -171,6 +206,7 @@ function CallList() {
                 </tr>
               ))}
             </tbody>
+            */}
           </table>
         )}
       </div>

@@ -304,10 +304,43 @@ async def s_transfer(h: Harness) -> list[Outcome]:
     return [out]
 
 
+async def _intake(h: Harness, name: str, first: str, goal: str, kind: str) -> list[Outcome]:
+    """Intake flow: the agent gets what the caller wants, their name and number, then ends the call."""
+    out, agent, state = await h.call(name, first, goal=goal, max_turns=8)
+    msgs = await h.rows(Message, state.call_id)
+    out.check(bool(msgs), "no callback request was saved")
+    if msgs:
+        out.check(msgs[0].caller_phone.endswith("5550111"), f"wrong phone saved: {msgs[0].caller_phone}")
+        out.check(msgs[0].caller_name == CALLER["name"], f"wrong name saved: {msgs[0].caller_name!r}")
+        out.check(msgs[0].reason.startswith(kind), f"reason {msgs[0].reason!r} should start with {kind!r}")
+    out.check(getattr(agent, "_goodbye", None) == h.clinic.callback_message, "call wasn't ended with the callback message")
+    never_confirms(out)
+    no_advice(out)
+    return [out]
+
+
+async def s_intake_appointment(h: Harness) -> list[Outcome]:
+    return await _intake(h, "intake-appointment", "I'd like to schedule an appointment.",
+                         "schedule a vaccination appointment (a flu shot)", "Appointment request")
+
+
+async def s_intake_health(h: Harness) -> list[Outcome]:
+    return await _intake(h, "intake-health", "I have a health question.",
+                         "ask about headaches you've had for a week; you'd like advice", "Health question")
+
+
+async def s_intake_other(h: Harness) -> list[Outcome]:
+    return await _intake(h, "intake-other", "Hi, I need to move my appointment on Friday.",
+                         "move your Friday appointment to next week", "Other request")
+
+
 SCENARIOS: dict[str, Callable] = {
-    "emergency": s_emergency, "crisis": s_crisis, "faq": s_faq, "booking": s_booking, "cancel": s_cancel,
-    "message": s_message, "advice": s_advice, "wrong-number": s_wrong_number, "unanswerable": s_unanswerable,
-    "transfer": s_transfer,
+    # Intake flow (current).
+    "intake-appointment": s_intake_appointment, "intake-health": s_intake_health, "intake-other": s_intake_other,
+    "emergency": s_emergency, "crisis": s_crisis, "advice": s_advice, "wrong-number": s_wrong_number,
+    # FULL RECEPTIONIST scenarios: their tools are commented out in core/agent.py. Uncomment with the full flow.
+    # "faq": s_faq, "booking": s_booking, "cancel": s_cancel, "message": s_message,
+    # "unanswerable": s_unanswerable, "transfer": s_transfer,
 }
 
 

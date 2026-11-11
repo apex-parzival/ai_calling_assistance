@@ -24,9 +24,14 @@ CRISIS_MESSAGE = (
     "I'm really sorry you're going through this. If you're in immediate danger, please hang up and call 9-1-1. "
     "You can also call or text 9-8-8, the Suicide Crisis Helpline, any time, day or night."
 )
+# FULL RECEPTIONIST version (offers booking and transfer). Restore it with the full flow in core/agent.py.
+# SAFE_REDIRECT = (
+#     "I'm not able to give medical advice. I can take a message for the clinical team, book you an appointment "
+#     "with a doctor, or transfer you to a staff member. What would you prefer?"
+# )
+# Intake flow: the agent only takes details, and the front desk calls every caller back.
 SAFE_REDIRECT = (
-    "I'm not able to give medical advice. I can take a message for the clinical team, book you an appointment "
-    "with a doctor, or transfer you to a staff member. What would you prefer?"
+    "I'm not able to give medical advice, but I'll make sure someone from the clinic calls you back about it."
 )
 
 _I = re.IGNORECASE
@@ -155,10 +160,16 @@ def looks_like_advice(text: str) -> str | None:
     return None
 
 
+# FULL RECEPTIONIST version. Restore it with the full flow in core/agent.py.
+# CLINICAL_REMINDER = (
+#     "[guardrail] The caller just asked a clinical question. Do not answer it or speculate. "
+#     "Say you can't give medical advice, then offer to take a message for the clinical team, book an appointment, "
+#     "or transfer to staff if it sounds urgent."
+# )
 CLINICAL_REMINDER = (
-    "[guardrail] The caller just asked a clinical question. Do not answer it or speculate. "
-    "Say you can't give medical advice, then offer to take a message for the clinical team, book an appointment, "
-    "or transfer to staff if it sounds urgent."
+    "[guardrail] The caller just described a health question. Do not answer it, explain it or speculate. "
+    "Say: \"I can't give medical advice, but someone from the clinic will call you back about it.\" Then ask "
+    "the next thing you still need (their full name, or their phone number)."
 )
 
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)

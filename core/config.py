@@ -173,6 +173,11 @@ class ClinicConfig(_Strict):
     services: list[Service] = Field(min_length=1)
     faqs: list[FAQ] = []
     greeting: str
+    # Intake flow: said word for word once the caller's request is saved, then the call ends.
+    callback_message: str = Field(
+        default="Thank you. Our front desk team is busy right now, and someone will call you back as soon as "
+                "possible. Goodbye.",
+        min_length=1)
     recording: Recording = Recording()
     escalation: Escalation
     voice: Voice = Voice()

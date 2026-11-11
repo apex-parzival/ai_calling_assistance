@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
 
@@ -66,6 +66,15 @@ class TakeMessage(_Payload):
 
 class TransferToHuman(_Payload):
     pass
+
+
+class CallbackRequest(_Payload):
+    """Intake flow: everything the front desk needs to call the caller back."""
+
+    name: Name
+    phone: Phone
+    request_type: Literal["appointment", "health_question", "other"]
+    details: str = Field(min_length=2, max_length=500)
 
 
 def resolve_service(clinic: ClinicConfig, text: str) -> Service | None:

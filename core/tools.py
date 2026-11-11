@@ -23,6 +23,7 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
+from core import phone as phone_utils
 from core import tool_schemas as ts
 from core.backend_client import BackendClient, BackendError, BackendRejected
 from core.config import ClinicConfig
@@ -74,15 +75,9 @@ _MONTHS = ["january", "february", "march", "april", "may", "june", "july", "augu
            "november", "december"]
 
 
-_DIGIT_WORDS = re.compile(r"\b(zero|oh|one|two|three|four|five|six|seven|eight|nine)\b", re.IGNORECASE)
-_WORD_VALUE = {w: str(i) for i, w in enumerate(["zero", "one", "two", "three", "four", "five", "six", "seven",
-                                                 "eight", "nine"])} | {"oh": "0"}
-
-
 def _digits(text: str) -> str:
-    """All digits in order, counting spelled-out ones ("four oh three" -> "403")."""
-    text = _DIGIT_WORDS.sub(lambda m: _WORD_VALUE[m.group(1).lower()], text)
-    return "".join(ch for ch in text if ch.isdigit())
+    """All digits in order, counting spoken ones ("four oh three" -> "403", "double two" -> "22")."""
+    return phone_utils.digits_in(text)
 
 
 def _is_yes(text: str) -> bool:
@@ -141,7 +136,10 @@ _PROMISE = re.compile(
     r"(?:call|contact|reach))", re.IGNORECASE)
 # Outcomes that mean something was actually recorded or handed to a person.
 _RECORDED = {"message", "booking_requested", "cancel_requested", "transferred", "emergency",
-             "system_error"}  # system_error is already flagged for staff
+             "callback_requested", "system_error"}  # system_error is already flagged for staff
+
+# Intake flow: how each kind of request is labelled in the reason staff see on the dashboard.
+REQUEST_LABELS = {"appointment": "Appointment request", "health_question": "Health question", "other": "Other request"}
 
 
 def unkept_follow_up(history: list[tuple[str, str]], outcome: str | None) -> bool:
@@ -191,7 +189,7 @@ class ReceptionistTools:
     def _failed(self, tool: str, message: str) -> str:
         self.state.failures[tool] += 1
         log.info("tool %s failed (%d): %s", tool, self.state.failures[tool], message)
-        if self.state.failures[tool] >= 2 and tool != "take_message":
+        if self.state.failures[tool] >= 2 and tool not in ("take_message", "save_callback_request"):
             return FALLBACK_TO_MESSAGE
         return message
 
@@ -278,6 +276,49 @@ class ReceptionistTools:
         except (BackendError, BackendRejected):
             self.state.unsent_messages.append(payload)  # sent (or spooled) at hang-up
         return "Message saved. Tell the caller the clinic will call them back."
+
+    async def do_save_callback_request(self, name: str, phone: str, request_type: str,
+                                       details: str) -> tuple[bool, str]:
+        """Intake flow: save who called, their number and what they want, for a front-desk callback.
+
+        Returns (saved, text). When saved is False, text goes back to the LLM as a correction.
+        Saved as a message, so it reaches staff the same way (and is spooled if the backend is down).
+        """
+        args = {"name": name, "phone": phone, "request_type": request_type, "details": details}
+        p, err = self._validate("save_callback_request", ts.CallbackRequest, args)
+        if err:
+            if self.state.failures["save_callback_request"] >= 2:
+                # Last resort: keep whatever we have so a person sees it.
+                self.state.unsent_messages.append({**args, "unvalidated": True})
+                self.state.outcome = self.state.outcome or "callback_requested"
+                return True, "Saved."
+            return False, err
+        history = self.history()
+        unverified = False
+        if not phone_confirmed_earlier(history, p.phone) and (problem := readback_problem(history, phone=p.phone)):
+            self.state.failures["callback_readback"] += 1
+            caller_said_yes = bool(history) and history[-1][0] == "user" and _is_yes(history[-1][1])
+            if self.state.failures["callback_readback"] < 2 or not caller_said_yes:
+                return False, (f"NOT SAVED — {problem}. Read the phone number back as single digits, like "
+                               f"'7 0 2, 2 0 1, 2 6 9 7', ask if it is correct, and when the caller says yes call "
+                               f"save_callback_request again with that number.")
+            # The caller keeps saying yes but the check can't match what was read back. Never loop:
+            # save it, and tell staff to check the number against the transcript.
+            log.warning("callback number %s saved without a matching read-back (%s)", p.phone, problem)
+            unverified = True
+        reason = f"{REQUEST_LABELS[p.request_type]}: {p.details}"
+        if unverified:
+            reason += " (check the number against the transcript)"
+        payload = {**self._base(), "name": p.name, "phone": p.phone, "reason": reason, "urgency": self.state.urgency}
+        self.state.caller_name = p.name
+        self.state.caller_phone = p.phone  # the number the front desk should dial, confirmed by the caller
+        self.state.reason = self.state.reason or reason[:255]
+        self.state.outcome = self.state.outcome or "callback_requested"
+        try:
+            await self.backend.post("/agent/messages", payload)
+        except (BackendError, BackendRejected):
+            self.state.unsent_messages.append(payload)  # sent (or spooled) at hang-up
+        return True, "Saved."
 
     async def do_transfer_to_human(self) -> str:
         number = self.clinic.escalation.transfer_number

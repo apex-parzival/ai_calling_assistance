@@ -17,6 +17,7 @@ import datetime as dt
 import functools
 import logging
 import os
+import re
 import sys
 import time
 from typing import Any
@@ -32,7 +33,7 @@ from core import phone as phone_utils
 from core.backend_client import BackendClient
 from core.config import ClinicConfig, ConfigError, load_clinic_config
 from core.guardrails import CLINICAL_REMINDER, ReplyFilter, detect_emergency, is_clinical_question
-from core.prompts import build_system_prompt
+from core.prompts import build_intake_prompt, build_system_prompt  # noqa: F401 - full prompt kept for switching back
 from core.providers.llm import make_llm
 from core.providers.stt import make_stt
 from core.providers.tts import make_tts
@@ -45,6 +46,7 @@ log = logging.getLogger("agent")
 LLM_DOWN_GOODBYE = ("I'm sorry, I'm still having a technical problem. The clinic will see that you called. "
                     "Goodbye.")
 SILENCE_REPROMPT = "Are you still there?"
+SAY_AGAIN = "Sorry, could you say that again?"
 SILENCE_GOODBYE = "I haven't heard anything, so I'll end the call now. Please call back any time. Goodbye."
 TURN_LIMIT_MESSAGE = ("I want to make sure you get the right help, so I'll have someone from the clinic follow up "
                       "with you. Thank you for calling. Goodbye.")
@@ -70,6 +72,10 @@ def config() -> tuple[Settings, ClinicConfig]:
         # Kokoro falls back to KOKORO_VOICE; a Cartesia voice is an account-specific ID.
         raise SettingsError(f"voice.voice_id is not set in {settings.clinic_dir / 'clinic.yaml'}")
     return settings, clinic
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
 
 def _detached(coro) -> asyncio.Task:
@@ -100,8 +106,17 @@ class Receptionist(ReceptionistTools, Agent):
         self._flagged = False  # staff alerted about an emergency on this call
         self._pending_end: str | None = None  # turn-limit goodbye waiting for the message to commit
         self._spoke_this_step = False  # the current LLM step has produced text for the caller
-        super().__init__(instructions=build_system_prompt(
-            clinic, dt.datetime.now(dt.timezone.utc), disable_thinking=settings.llm_disable_thinking))
+        self._greeting_sentences: set[str] | None = None
+        self._instruction_text: str | None = None
+        self._example_replies: list[str] = []
+        # FULL RECEPTIONIST prompt (FAQs, booking, cancelling, messages, transfers). To switch back, use this
+        # and uncomment the five tools at the bottom of this class.
+        # super().__init__(instructions=build_system_prompt(
+        #     clinic, dt.datetime.now(dt.timezone.utc), disable_thinking=settings.llm_disable_thinking))
+        # Intake flow: what the caller wants, their name and number, then "the front desk will call you back".
+        super().__init__(instructions=build_intake_prompt(
+            clinic, dt.datetime.now(dt.timezone.utc), caller_phone=state.caller_phone,
+            disable_thinking=settings.llm_disable_thinking))
 
     # --- conversation hooks -------------------------------------------------
 
@@ -248,6 +263,8 @@ class Receptionist(ReceptionistTools, Agent):
 
         # Guardrail 3: every sentence of every reply is checked before it reaches TTS.
         f = ReplyFilter()
+        dropped: list[str] = []
+        said = leaked = False
         self._spoke_this_step = False
         async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
             if isinstance(chunk, str):
@@ -263,11 +280,57 @@ class Receptionist(ReceptionistTools, Agent):
             # a tool can start before that ("Let me check" + tool call). No hold-on line then.
             self._spoke_this_step |= bool(text.strip())
             for sentence in f.feed(text):
-                yield sentence + " "
+                if self._reads_instructions(sentence):
+                    leaked = True
+                elif self._repeats_greeting(sentence):
+                    dropped.append(sentence)
+                else:
+                    said = True
+                    yield sentence + " "
         for sentence in f.flush():
-            yield sentence
+            if self._reads_instructions(sentence):
+                leaked = True
+            elif self._repeats_greeting(sentence):
+                dropped.append(sentence)
+            else:
+                said = True
+                yield sentence
+        if leaked:
+            log.warning("dropped instruction text from LLM reply")
+        if not said and dropped:
+            yield dropped[-1]  # the whole reply was the greeting again: still answer, never silence
+        elif not said and leaked:
+            yield SAY_AGAIN
         if f.blocked:
             log.warning("blocked medical advice in LLM reply (matched %r)", f.blocked)
+
+    def _repeats_greeting(self, sentence: str) -> bool:
+        """Small models sometimes start every reply with the greeting again; the caller heard it once."""
+        if self._greeting_sentences is None:
+            sentences = {_norm(s) for s in re.split(r"(?<=[.!?])\s+", self.clinic.greeting)}
+            # Never filter emergency wording: the model may say it to a caller in danger.
+            self._greeting_sentences = {s for s in sentences if s and not re.search(r"9 ?1 ?1|emergenc", s)}
+        return _norm(sentence) in self._greeting_sentences
+
+    def _reads_instructions(self, sentence: str) -> bool:
+        """True if the model is reading its own instructions aloud (seen with an 8B model).
+
+        A sentence of five or more words copied from the system prompt or the clinical reminder,
+        unless it's one of the quoted example replies the prompt gives the model to say, or clinic
+        information from clinic.yaml (FAQ answers, directions...) that is meant to be read out.
+        """
+        if self._instruction_text is None:
+            text = f"{self.instructions}\n{CLINICAL_REMINDER}"
+            c = self.clinic
+            quoted = [q for q in re.findall(r'"([^"]*)"', text) if len(q) >= 8]  # pair quotes first, then filter
+            speakable = [*quoted, *(f.answer for f in c.faqs), c.address.directions,
+                         c.hours_notes, *(f"{s.description} {s.notes}" for s in c.services),
+                         ", ".join(s.name for s in c.services)]
+            self._instruction_text = _norm(text)
+            self._example_replies = [_norm(t) for t in speakable if t]
+        s = _norm(sentence)
+        return (len(s.split()) >= 5 and s in self._instruction_text
+                and not any(s in ex for ex in self._example_replies))
 
     # --- helpers used by tools ----------------------------------------------
 
@@ -321,62 +384,87 @@ class Receptionist(ReceptionistTools, Agent):
 
         _detached(run())
 
-    # --- the five tools -----------------------------------------------------
+    # --- intake flow: the one tool ---------------------------------------------
 
     @function_tool()
-    async def check_availability(self, context: RunContext, date: str, service: str) -> str:
-        """Look up open appointment times on one day.
-
-        Args:
-            date: The day, as YYYY-MM-DD.
-            service: The service id from the services list, e.g. standard_visit.
-        """
-        self._hold_on("check_availability")
-        return await self.do_check_availability(date, service)
-
-    @function_tool()
-    async def book_appointment(self, context: RunContext, name: str, phone: str, date: str, time: str,
-                               service: str) -> str:
-        """Request an appointment. Only call this after reading the details back and the caller saying yes.
+    async def save_callback_request(self, context: RunContext, name: str, phone: str, request_type: str,
+                                    details: str) -> Any:
+        """Save the caller's request so the front desk calls them back. Only call this after reading the phone
+        number back and the caller saying it is correct. The system then says goodbye and ends the call.
 
         Args:
             name: The caller's full name.
-            phone: The caller's 10-digit phone number.
-            date: The day, as YYYY-MM-DD.
-            time: The time, 24-hour HH:MM, exactly as returned by check_availability.
-            service: The service id.
+            phone: The 10-digit callback number the caller confirmed.
+            request_type: One of: appointment, health_question, other.
+            details: For an appointment, the service. Otherwise what it is about, in a few words.
         """
-        self._hold_on("book_appointment")
-        return await self.do_book_appointment(name, phone, date, time, service)
+        saved, result = await self.do_save_callback_request(name, phone, request_type, details)
+        if not saved:
+            return result  # a correction for the model; nothing was saved
+        # Fixed wording from clinic.yaml, then hang up, so the model can't promise anything else.
+        self.end_call(self.clinic.callback_message)
+        return ToolResult("Saved. The closing message is playing and the call is ending. Say nothing else.",
+                          reply_required=False)
 
-    @function_tool()
-    async def cancel_appointment(self, context: RunContext, phone: str, date: str) -> str:
-        """Cancel an appointment. Only call this after reading the phone number and date back and the caller saying yes.
-
-        Args:
-            phone: The phone number the appointment is under, 10 digits.
-            date: The appointment day, as YYYY-MM-DD.
-        """
-        self._hold_on("cancel_appointment")
-        return await self.do_cancel_appointment(phone, date)
-
-    @function_tool()
-    async def take_message(self, context: RunContext, name: str, phone: str, reason: str) -> str:
-        """Leave a message for the front desk. Read the phone number back and get a yes first.
-
-        Args:
-            name: The caller's name.
-            phone: A 10-digit callback number.
-            reason: What the message is about, in a sentence.
-        """
-        self._hold_on("take_message")
-        return await self.do_take_message(name, phone, reason)
-
-    @function_tool()
-    async def transfer_to_human(self, context: RunContext) -> Any:
-        """Transfer the caller to a clinic staff member."""
-        await context.wait_for_playout()  # let the agent finish its sentence first
-        return await self.do_transfer_to_human()
+    # --- FULL RECEPTIONIST: the five tools ------------------------------------
+    # Turned off for the intake flow. To switch back: uncomment these five tools, use build_system_prompt
+    # in __init__ above, restore the full-flow texts in core/guardrails.py and the greeting in clinic.yaml.
+    # Their logic (do_check_availability, do_book_appointment, ...) is still live in core/tools.py and tested.
+    #
+    # @function_tool()
+    # async def check_availability(self, context: RunContext, date: str, service: str) -> str:
+    #     """Look up open appointment times on one day.
+    #
+    #     Args:
+    #         date: The day, as YYYY-MM-DD.
+    #         service: The service id from the services list, e.g. standard_visit.
+    #     """
+    #     self._hold_on("check_availability")
+    #     return await self.do_check_availability(date, service)
+    #
+    # @function_tool()
+    # async def book_appointment(self, context: RunContext, name: str, phone: str, date: str, time: str,
+    #                            service: str) -> str:
+    #     """Request an appointment. Only call this after reading the details back and the caller saying yes.
+    #
+    #     Args:
+    #         name: The caller's full name.
+    #         phone: The caller's 10-digit phone number.
+    #         date: The day, as YYYY-MM-DD.
+    #         time: The time, 24-hour HH:MM, exactly as returned by check_availability.
+    #         service: The service id.
+    #     """
+    #     self._hold_on("book_appointment")
+    #     return await self.do_book_appointment(name, phone, date, time, service)
+    #
+    # @function_tool()
+    # async def cancel_appointment(self, context: RunContext, phone: str, date: str) -> str:
+    #     """Cancel an appointment. Only call this after reading the phone number and date back and the caller saying yes.
+    #
+    #     Args:
+    #         phone: The phone number the appointment is under, 10 digits.
+    #         date: The appointment day, as YYYY-MM-DD.
+    #     """
+    #     self._hold_on("cancel_appointment")
+    #     return await self.do_cancel_appointment(phone, date)
+    #
+    # @function_tool()
+    # async def take_message(self, context: RunContext, name: str, phone: str, reason: str) -> str:
+    #     """Leave a message for the front desk. Read the phone number back and get a yes first.
+    #
+    #     Args:
+    #         name: The caller's name.
+    #         phone: A 10-digit callback number.
+    #         reason: What the message is about, in a sentence.
+    #     """
+    #     self._hold_on("take_message")
+    #     return await self.do_take_message(name, phone, reason)
+    #
+    # @function_tool()
+    # async def transfer_to_human(self, context: RunContext) -> Any:
+    #     """Transfer the caller to a clinic staff member."""
+    #     await context.wait_for_playout()  # let the agent finish its sentence first
+    #     return await self.do_transfer_to_human()
 
 
 # --- per-call wiring -------------------------------------------------------

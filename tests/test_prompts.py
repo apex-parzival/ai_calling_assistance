@@ -34,3 +34,20 @@ def test_disclosure_and_no_think(clinics_root):
     p = _prompt(clinics_root, dt.datetime(2026, 11, 9, 10, 0))
     assert "Maplegate Family Clinic" in p
     assert p.rstrip().endswith("/no_think")
+
+
+def test_intake_prompt_is_built_from_config(clinics_root):
+    from core.prompts import build_intake_prompt
+    clinic = load_clinic_config(clinics_root / "demo_clinic")
+    p = build_intake_prompt(clinic, dt.datetime(2026, 11, 9, 10, 0, tzinfo=clinic.tz()))
+    assert "Maplegate Family Clinic" in p and "save_callback_request" in p
+    assert all(s.name in p for s in clinic.services)
+    assert "The best phone number to reach them." in p
+    assert p.rstrip().endswith("/no_think")
+
+
+def test_intake_prompt_offers_caller_id(clinics_root):
+    from core.prompts import build_intake_prompt
+    clinic = load_clinic_config(clinics_root / "demo_clinic")
+    p = build_intake_prompt(clinic, dt.datetime(2026, 11, 9, 10, 0, tzinfo=clinic.tz()), caller_phone="+14035550111")
+    assert "phoning from 4 0 3, 5 5 5, 0 1 1 1" in p

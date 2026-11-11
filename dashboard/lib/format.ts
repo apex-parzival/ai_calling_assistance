@@ -37,6 +37,7 @@ const OUTCOMES: Record<string, string> = {
   booking_requested: "Booking requested",
   cancel_requested: "Cancellation",
   message: "Message",
+  callback_requested: "Callback requested",
   transferred: "Transferred",
   emergency: "Told to call 911",
   answered: "Answered",

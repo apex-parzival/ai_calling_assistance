@@ -288,6 +288,7 @@ async def _spoken_during(session, user_input: str) -> list[str]:
     return spoken
 
 
+@pytest.mark.skip(reason="intake flow: check_availability is commented out in core/agent.py; un-skip with the full receptionist")
 @pytest.mark.anyio
 async def test_silent_tool_call_gets_a_hold_on_line(make_session):
     from core.agent import HOLD_ON
@@ -301,6 +302,7 @@ async def test_silent_tool_call_gets_a_hold_on_line(make_session):
     assert HOLD_ON["check_availability"] not in [getattr(i, "text_content", None) for i in agent.chat_ctx.items]
 
 
+@pytest.mark.skip(reason="intake flow: check_availability is commented out in core/agent.py; un-skip with the full receptionist")
 @pytest.mark.anyio
 async def test_no_hold_on_line_when_the_model_already_spoke(make_session):
     session, _, model = await make_session([], scripted=_ToolCallLLM(preamble="Let me look at the twentieth."))
@@ -334,7 +336,8 @@ async def test_llm_cache_warmed_with_the_real_prompt_and_tools(make_session):
     system = [m for m in warm.requests[0].items if getattr(m, "role", None) == "system"]
     assert system and agent.clinic.name in system[0].text_content
     names = {getattr(t, "id", None) or getattr(t, "name", None) for t in warm.tools[0]}
-    assert {"book_appointment", "take_message", "transfer_to_human"} <= names
+    # FULL RECEPTIONIST: assert {"book_appointment", "take_message", "transfer_to_human"} <= names
+    assert names == {"save_callback_request"}  # intake flow: the only tool
     # the real request starts with the same system prompt the warm-up sent
     real_system = [m for m in scripted.requests[0].items if getattr(m, "role", None) == "system"]
     assert real_system[0].text_content == system[0].text_content
@@ -358,3 +361,117 @@ async def test_failed_warm_up_never_sets_off_llm_down_fallback(make_session):
     assert agent.state.outcome != "system_error"
     assert not [t for t in said if "technical problem" in (t or "")]
     assert any("We open at 8." in (t or "") for t in said)
+
+
+# --- intake flow ---------------------------------------------------------------
+
+
+class _IntakeLLM(ScriptedLLM):
+    """Replies in order; a dict reply is a tool call ({"name": ..., "args": {...}})."""
+
+    def chat(self, *, chat_ctx, tools=None, conn_options=DEFAULT_API_CONNECT_OPTIONS, **kw):
+        reply = self.replies[0] if self.replies else "Okay."
+        if isinstance(reply, dict):
+            self.replies.pop(0)
+            self.requests.append(chat_ctx.copy())
+            return _CallStream(self, chat_ctx=chat_ctx, tools=tools or [], conn_options=conn_options,
+                               text="", call=reply)
+        return super().chat(chat_ctx=chat_ctx, tools=tools, conn_options=conn_options, **kw)
+
+
+class _CallStream(_ScriptedStream):
+    def __init__(self, owner, *, call: dict, **kw) -> None:
+        super().__init__(owner, **kw)
+        self._call = call
+
+    async def _run(self) -> None:
+        self._event_ch.send_nowait(llm.ChatChunk(id="s", delta=llm.ChoiceDelta(role="assistant", tool_calls=[
+            llm.FunctionToolCall(name=self._call["name"], call_id="c1", arguments=json.dumps(self._call["args"]))])))
+
+
+SAVE = {"name": "save_callback_request",
+        "args": {"name": "Jordan Lee", "phone": "4035550111", "request_type": "appointment", "details": "Vaccination"}}
+
+
+async def _intake_call(make_session, replies: list, caller: list[str]):
+    session, agent, model = await make_session([], scripted=_IntakeLLM(replies))
+    goodbyes: list[str] = []
+    agent.end_call = goodbyes.append  # no room to delete in tests
+    async with session:
+        for words in caller:
+            result = await session.run(user_input=words)
+            await result
+    return agent, model, goodbyes
+
+
+@pytest.mark.anyio
+async def test_intake_saves_request_then_says_callback_message_and_ends(make_session, backend_calls):
+    agent, model, goodbyes = await _intake_call(make_session, [
+        "Sure. What's your full name?",
+        "Thanks, Jordan. What's the best number to reach you?",
+        "That's 4 0 3, 5 5 5, 0 1 1 1. Is that correct?",
+        SAVE,
+    ], ["I'd like to book a vaccination.", "Jordan Lee", "403 555 0111", "Yes, that's right."])
+    assert goodbyes == [agent.clinic.callback_message]
+    assert "30 minutes" in agent.clinic.callback_message
+    [msg] = [b for p, b in backend_calls if p == "/agent/messages"]
+    assert msg["name"] == "Jordan Lee" and msg["phone"] == "+14035550111"
+    assert msg["reason"] == "Appointment request: Vaccination"
+    s = agent.state
+    assert (s.caller_name, s.caller_phone, s.outcome) == ("Jordan Lee", "+14035550111", "callback_requested")
+    assert len(model.requests) == 4  # no reply after the tool: the fixed message is said instead
+
+
+@pytest.mark.anyio
+async def test_intake_refuses_to_save_before_number_is_read_back(make_session, backend_calls):
+    agent, model, goodbyes = await _intake_call(make_session, [
+        "Sure. What's your full name and number?",
+        SAVE,
+        "Let me read that back: 4 0 3, 5 5 5, 0 1 1 1. Is that correct?",
+    ], ["I'd like to book a vaccination.", "Jordan Lee, 403 555 0111"])
+    assert goodbyes == []  # call not ended
+    assert not [p for p, _ in backend_calls if p == "/agent/messages"]
+    tool_output = [i for i in model.requests[-1].items if getattr(i, "type", None) == "function_call_output"]
+    assert tool_output and tool_output[0].output.startswith("NOT SAVED")
+
+
+@pytest.mark.anyio
+async def test_repeated_greeting_is_dropped_but_911_line_and_question_kept(make_session):
+    session, agent, _ = await make_session([
+        "Thank you for calling Maplegate Family Clinic. If this is a medical emergency, please hang up and "
+        "call 9-1-1. What is your full name?",
+        "Thank you for calling Maplegate Family Clinic.",
+    ])
+    async with session:
+        first = await session.run(user_input="I'd like an appointment for a flu shot.")
+        await first
+        second = await session.run(user_input="hello?")
+        await second
+    [reply] = assistant_texts(first)
+    assert "Thank you for calling" not in reply
+    assert "9-1-1" in reply and reply.endswith("What is your full name?")
+    assert assistant_texts(second) == ["Thank you for calling Maplegate Family Clinic."]  # never silence
+
+
+@pytest.mark.anyio
+async def test_instruction_text_is_never_read_to_the_caller(make_session):
+    # Seen with an 8B model: it read a safety rule from its prompt aloud, then carried on.
+    session, agent, _ = await make_session([
+        "I'm sorry to hear that. Never give medical advice: no diagnosis, no opinions on symptoms, no medication "
+        "or dosage advice, no reassurance that something is \"normal\". The front desk can help with that. "
+        "May I have your full name?",
+        "Say you can't give medical advice and that someone from the clinic will call them back about it.",
+        "Free parking is available in the lot behind the building for up to two hours.",
+    ])
+    async with session:
+        first = await session.run(user_input="I've had a headache for a week.")
+        await first
+        second = await session.run(user_input="ok")
+        await second
+        third = await session.run(user_input="where do I park?")
+        await third
+    assert assistant_texts(first) == [
+        "I'm sorry to hear that. The front desk can help with that. May I have your full name?"]
+    assert assistant_texts(second) == ["Sorry, could you say that again?"]  # nothing left, never silence
+    # clinic information from clinic.yaml is meant to be read out
+    assert assistant_texts(third) == ["Free parking is available in the lot behind the building for up to two hours."]

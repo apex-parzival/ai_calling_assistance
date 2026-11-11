@@ -134,10 +134,21 @@ faqs:
       You'll need to book an appointment so the doctor can see you.
 
 # Must disclose AI + recording; validated at startup.
+# FULL RECEPTIONIST greeting (restore it with the full flow, see core/agent.py):
+# greeting: >-
+#   Thank you for calling Maplegate Family Clinic. I'm the clinic's AI assistant, and this call
+#   is recorded and transcribed for quality and record-keeping. If this is a medical emergency,
+#   please hang up and call 9-1-1. How can I help you today?
 greeting: >-
   Thank you for calling Maplegate Family Clinic. I'm the clinic's AI assistant, and this call
   is recorded and transcribed for quality and record-keeping. If this is a medical emergency,
-  please hang up and call 9-1-1. How can I help you today?
+  please hang up and call 9-1-1. Do you have a health question, or would you like to schedule
+  an appointment?
+
+# Intake flow: said word for word once the caller's details are saved, then the call ends.
+callback_message: >-
+  Thank you. Our front desk receptionists are busy with other patients right now, but someone
+  will call you back within 30 minutes. Goodbye.
 
 recording:
   enabled: true

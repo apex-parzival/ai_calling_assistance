@@ -16,6 +16,7 @@ def make_stt(clinic: ClinicConfig, settings: Settings):
             language=clinic.voice.language.split("-")[0],  # "en" covers Canadian English on nova-3
             api_key=settings.deepgram_api_key.get_secret_value(),
             smart_format=True,   # "four oh three" -> 403, better for phone numbers
+            numerals=True,       # spoken numbers as digits in the transcript (a live call came through as words)
             filler_words=True,
             # Bias recognition toward words this clinic's callers will say.
             keyterm=[clinic.name, *(s.name for s in clinic.services)][:50],

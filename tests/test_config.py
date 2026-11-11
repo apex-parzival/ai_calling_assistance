@@ -100,3 +100,9 @@ def test_duplicate_service_ids_rejected(tmp_path, demo_raw):
     demo_raw["services"].append(dict(demo_raw["services"][0]))
     with pytest.raises(ConfigError, match="duplicate"):
         load_clinic_config(write(tmp_path, demo_raw))
+
+
+def test_callback_message_has_a_default(demo_raw, tmp_path):
+    raw = {k: v for k, v in demo_raw.items() if k != "callback_message"}
+    (tmp_path / "clinic.yaml").write_text(yaml.safe_dump(raw), encoding="utf-8")
+    assert "call you back" in load_clinic_config(tmp_path).callback_message

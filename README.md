@@ -8,6 +8,12 @@ time of 1.21 s on real voice calls. Phase 2 (telephony) is next. See [Phase 1 st
 the [task list](docs/TASKS.md), the [runbook](docs/RUNBOOK.md) (every command, and how to test the
 whole system) and the Build & Deployment Guide (v2) PDF (what changes for production).
 
+**Current call flow: intake only (client request).** The agent greets the caller, asks whether they have a
+health question or want an appointment (and for which service), takes their name and callback number,
+says the front desk will call back (`callback_message` in `clinic.yaml`) and ends the call. The dashboard
+lists caller name, phone number, reason and summary. The full receptionist (booking, cancelling,
+messages, transfers, FAQs) is commented out, not deleted; `core/agent.py` says how to switch back.
+
 ## Layout
 
 ```
