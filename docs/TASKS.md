@@ -73,8 +73,8 @@ Updated after every step. `[x]` done · `[>]` working on it now · `[ ]` next.
 | [x] | Dashboard call list now shows only caller name, phone number, reason for call, summary (+ call time); old columns kept as a JSX comment | `tsc` clean |
 | [x] | Found with the real 8B model, fixed in code: it repeated the greeting in every reply, and once read a safety rule from its prompt aloud. Greeting sentences (never the 9-1-1 one) and instruction text are now dropped from replies | live text run on Ollama **19/19** (3 intake, 10 emergency, crisis, 4 advice, wrong number) |
 | [x] | Found on your Playground call, fixed: "double two" in a spoken number was read as one digit, so the read-back never matched and the agent looped. Now "double/triple" are understood, Deepgram returns numbers as digits, the agent reads numbers back as single digits, and a confirmed number is saved after two failed checks (flagged "check the number") instead of looping | 233 tests pass; **your re-test: works** |
-| [ ] | Intake: "within 30 minutes" is also said after hours and on closed days (e.g. today, a stat holiday). Decide an after-hours wording | you |
-| [ ] | Intake: the emergency message still says "stay on the line and I'll connect you", but transfer is turned off | you |
+| [ ] | Intake: "within 30 minutes" is also said after hours and on closed days. **Agreed: add an after-hours wording, later** | Claude |
+| [x] | Intake: emergency message still says "stay on the line and I'll connect you" while transfer is off. **Your call: leave it as is** | you |
 
 `[x]` done and verified · `[~]` built, but not yet verified the way the exit criterion asks · `[ ]` not started.
 **Who** says who has to do it: *you* (needs your accounts, card, 2FA or admin rights), *Claude*, or *clinic*.
